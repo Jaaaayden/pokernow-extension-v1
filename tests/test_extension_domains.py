@@ -103,6 +103,11 @@ def test_the_floating_hud_can_frame_the_panel_on_every_game_domain():
     manifest = json.loads((EXTENSION_DIR / "manifest.json").read_text(encoding="utf-8"))
     entries = [e for e in manifest.get("web_accessible_resources", []) if "sidepanel.html" in e["resources"]]
     assert entries, "sidepanel.html is not web-accessible"
+    # Every extension page framed inside it needs listing too: Chrome checks each
+    # frame whose ancestors include the game page, and blocks the settings (⚙)
+    # with "This page has been blocked by Chrome" otherwise.
+    framed = {"popup.html"}
+    assert all(framed <= set(e["resources"]) for e in entries)
     exposed = {m.split("/*")[0].rstrip("/") for e in entries for m in e["matches"]}
     assert exposed == set(HOSTS)
     assert {m.split("/games/")[0] for m in _content_script_matches()} == set(HOSTS)

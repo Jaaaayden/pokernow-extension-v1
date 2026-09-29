@@ -27,7 +27,7 @@
   ],
   "web_accessible_resources": [
     {
-      "resources": ["sidepanel.html"],
+      "resources": ["sidepanel.html", "popup.html"],
       "matches": [
         "https://www.pokernow.com/*",
         "https://pokernow.com/*",
