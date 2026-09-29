@@ -430,8 +430,12 @@
         state.liveInserted = -1;
       }
       if (changes.hudMode) {
-        state.hudMode = changes.hudMode.newValue === "float" ? "float" : "panel";
-        float.apply();
+        // Through the worker, which knows whether this browser has a side panel.
+        send({ type: "settings" }).then((s) => {
+          if (!s.ok) return;
+          state.hudMode = s.data.hudMode === "float" ? "float" : "panel";
+          float.apply();
+        });
       }
     });
     loop();

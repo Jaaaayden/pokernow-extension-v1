@@ -7,6 +7,7 @@
   $("poll").value = s.pollSeconds;
   $("livemin").value = s.liveMin ?? 1;
   $("liveknown").value = s.liveKnown ?? 5;
+  if (!chrome.sidePanel) $("hudmode").querySelector('option[value="panel"]').remove();
   $("hudmode").value = s.hudMode === "float" ? "float" : "panel";
   // Known ahead of the click: the side panel opens only in the click's own turn,
   // before anything has been awaited.
