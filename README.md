@@ -10,7 +10,7 @@ session ends, it lists the hands you should look at again.
 
 Other PokerNow HUDs show you a VPIP number. This shows you the spot.
 
-| | Typical PokerNow HUD | PokerNow Tracker |
+| | Similar PokerNow HUD Extensions | PokerNow Tracker |
 |---|:-:|:-:|
 | Live hand capture that follows each decision as it happens | – | ✓ |
 | This session's stats beside lifetime | – | ✓ |
