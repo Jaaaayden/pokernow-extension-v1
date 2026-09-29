@@ -44,6 +44,7 @@
     }
   ],
   "side_panel": { "default_path": "sidepanel.html" },
+  "options_page": "popup.html",
   "action": {
     "default_title": "Tracker for PokerNow",
     "default_icon": { "16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png" }

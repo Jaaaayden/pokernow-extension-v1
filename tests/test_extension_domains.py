@@ -95,6 +95,21 @@ def test_the_hud_opens_in_the_side_panel():
     assert 0 <= html.index('src="spot.js"') < html.index('src="sidepanel.js"')
 
 
+def test_the_settings_are_reachable_without_a_hud():
+    """A browser with no side panel API (Opera) must still get a HUD and settings.
+
+    There, a saved "panel" left the toolbar icon doing nothing, and the settings --
+    opened from the HUD's gear -- could not be reached to switch to the floating box.
+    So the worker reads the mode as "float" wherever the API is missing, and the
+    settings page is the extension's options page too (right-click the icon).
+    """
+    manifest = json.loads((EXTENSION_DIR / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["options_page"] == "popup.html"
+    background = (EXTENSION_DIR / "background.js").read_text(encoding="utf-8")
+    assert '!chrome.sidePanel ? "float"' in background
+    assert "hudMode: modeOf(s.hudMode)" in background
+
+
 def test_the_floating_hud_can_frame_the_panel_on_every_game_domain():
     """Float mode frames sidepanel.html on the game page itself.
 

@@ -7,6 +7,7 @@
   $("poll").value = s.pollSeconds;
   $("livemin").value = s.liveMin ?? 1;
   $("liveknown").value = s.liveKnown ?? 5;
+  if (!chrome.sidePanel) $("hudmode").querySelector('option[value="panel"]').remove();
   $("hudmode").value = s.hudMode === "float" ? "float" : "panel";
   // "auto" has not settled yet; the health check below settles it and shows which.
   let current = s.backend === "builtin" ? "builtin" : "companion";

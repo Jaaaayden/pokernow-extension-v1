@@ -37,6 +37,11 @@ function count(v, fallback, floor) {
 // deliberate choice and is left alone.
 const RETIRED_SERVERS = ["http://127.0.0.1:8000", "http://localhost:8000"];
 
+// Browsers without Chrome's side panel API (Opera among them) have only the
+// floating box. Saved "panel" there would leave the icon doing nothing, with the
+// settings -- reached from the HUD -- out of reach too, so it reads as "float".
+const modeOf = (v) => (v === "float" || !chrome.sidePanel ? "float" : "panel");
+
 async function settings() {
   const s = await chrome.storage.sync.get(DEFAULTS);
   let server = (s.server || DEFAULTS.server).replace(/\/+$/, "");
@@ -44,7 +49,7 @@ async function settings() {
     server = DEFAULTS.server;
     await chrome.storage.sync.set({ server });
   }
-  return { ...DEFAULTS, ...s, server };
+  return { ...DEFAULTS, ...s, server, hudMode: modeOf(s.hudMode) };
 }
 
 // The tracker refuses a write without this header: a site in another tab can POST
@@ -337,7 +342,7 @@ const GAME_URLS = [
 const isGame = (url) => /^https:\/\/(www\.)?pokernow\.(com|club)\/games\/[A-Za-z0-9_-]+/.test(url || "");
 async function hudMode() {
   const { hudMode } = await chrome.storage.sync.get({ hudMode: DEFAULTS.hudMode });
-  return hudMode === "float" ? "float" : "panel";
+  return modeOf(hudMode);
 }
 async function applyTab(tabId, game, mode) {
   if (!sidePanel) return;
