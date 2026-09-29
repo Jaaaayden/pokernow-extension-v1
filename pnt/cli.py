@@ -26,6 +26,7 @@ from .ingest.importer import (
     rename_player,
     split_identities,
 )
+from .ingest.csv_source import HAND_START, has_hands, read_csv
 from .ingest.log_folder import LOG_DIR, SAVE_LOGS, log_path, write_log
 from .logfmt import redact as rd
 from .stats.allin import allin_report
@@ -226,6 +227,9 @@ def import_cmd(
     if not paths and expanded and Path(expanded[0]).parent == BUNDLED_LOG_DIR:
         _announce_sample(folder)
     for path in expanded:
+        if not has_hands(read_csv(path)):
+            typer.echo(f"{Path(path).name}: no hands (joined and left before a deal), skipped")
+            continue
         s = _import(conn, path, folder)
         note = "no new entries (pure re-import)" if s["entries_new"] == 0 else ""
         typer.echo(
@@ -337,8 +341,11 @@ def backfill(
         if not entries:
             typer.echo(f"{gid}: the log is empty, nothing written")
             continue
+        if not has_hands(entries):
+            typer.echo(f"{gid}: no hands were dealt, nothing written")
+            continue
         new = write_log(entries, path)
-        hands = sum(e.entry.startswith("-- starting hand #") for e in entries)
+        hands = sum(e.entry.startswith(HAND_START) for e in entries)
         hero = fetchmod.count_hero_lines(entries)
         typer.echo(
             f"{gid}: {hands} hands, {new} new lines, {hero} of your hole cards -> {path.name}"
@@ -492,6 +499,12 @@ PruneUntrackedOpt = typer.Option(
     "--prune-untracked",
     help="Also remove every game no log-folder file is on record for. See --help.",
 )
+RemoveEmptyOpt = typer.Option(
+    False,
+    "--remove-empty",
+    help="Delete logs with no hand in them (a table joined and left before the first"
+    " deal) from the log folder, and their games from the database.",
+)
 
 
 @app.command()
@@ -499,8 +512,13 @@ def sync(
     db: Path = DbOpt,
     log_dir: Path | None = LogDirOpt,
     prune_untracked: bool = PruneUntrackedOpt,
+    remove_empty: bool = RemoveEmptyOpt,
 ) -> None:
     """Bring the database in step with the log folder: import new logs, drop deleted ones.
+
+    Logs with no hand in them -- a table joined and left before the first deal --
+    are not imported. `--remove-empty` deletes them from the folder as well, along
+    with any game they already put in the database.
 
     The background server does this by itself every few seconds (PNT_SYNC_SECONDS,
     0 to turn it off), so this is for when it is not running.
@@ -517,6 +535,9 @@ def sync(
     """
     conn = connect(db)
     folder = log_dir or LOG_DIR
+    emptied = syncmod.remove_empty(conn, folder) if remove_empty and folder.is_dir() else []
+    for path in emptied:
+        typer.echo(f"{path.name}: no hands, deleted")
     out = syncmod.sync_folder(conn, folder)
     for gid, hands in out.removed.items():
         typer.echo(f"{gid}: log deleted, removed {hands} hands")
@@ -536,7 +557,11 @@ def sync(
             f"{len(untracked)} game(s) have no log file in the folder on record and are"
             " left alone; --prune-untracked removes them"
         )
-    if not (out.removed or changed or out.failed or untracked):
+    if out.empty:
+        typer.echo(
+            f"{len(out.empty)} log(s) with no hands skipped; --remove-empty deletes them"
+        )
+    if not (out.removed or changed or out.failed or untracked or emptied or out.empty):
         typer.echo(f"in sync with {folder}")
     if out.failed:
         raise typer.Exit(1)

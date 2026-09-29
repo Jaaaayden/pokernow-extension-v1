@@ -55,6 +55,10 @@ The rules that keep this safe:
   same as an unplugged drive.
 - Deletion works on whole files. Lines cut out of a CSV that stays in the folder
   stay in the database.
+- Logs with no hand in them are ignored. These come from joining a table and leaving
+  before the first deal. Live capture and `pnt backfill` no longer write them, and
+  sync and `pnt import` skip them. `pnt sync --remove-empty` deletes the ones already
+  in the folder, along with any game they put in the database.
 
 ### Backfill: old games by link
 

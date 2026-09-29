@@ -10,6 +10,10 @@ Deletion is whole files only. Ingest is append-only, so lines cut out of a CSV
 that stays in the folder stay in the database too. To drop lines, move the file
 out (the game goes with it at the next sync), then put the edited copy back.
 
+A log with no hand in it -- a table joined and left before the first deal -- is not
+imported: it would be a game of nothing. `remove_empty` clears out the ones already
+in the folder.
+
 Two guards against deleting what is merely out of reach: a file whose *folder* is
 missing counts as unavailable, not deleted (an unplugged drive, a renamed folder),
 and nothing here ever touches a game that has no `log_files` row.
@@ -24,7 +28,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from ..db.conn import writing
-from .csv_source import game_id_from_filename, read_csv
+from .csv_source import RawEntry, game_id_from_filename, has_hands, read_csv
 from .importer import delete_game, ingest_entries, rebuild_game
 
 LOG_GLOB = "poker_now_log_*.csv"
@@ -37,6 +41,7 @@ class SyncResult:
     imported: list[dict] = field(default_factory=list)  # import summaries, one per file read
     removed: dict[str, int] = field(default_factory=dict)  # game_id -> hands removed
     failed: dict[str, str] = field(default_factory=dict)  # path -> why it could not be read
+    empty: list[str] = field(default_factory=list)  # paths skipped for holding no hand
 
 
 def _key(path: Path) -> str:
@@ -92,14 +97,17 @@ def prune(conn: sqlite3.Connection, game_ids: list[str] | None = None) -> dict[s
     return removed
 
 
-def import_file(conn: sqlite3.Connection, path: Path) -> dict:
+def import_file(conn: sqlite3.Connection, path: Path, entries: list[RawEntry] | None = None) -> dict:
     """Import one log-folder file and record it. Rebuilds only when something changed.
 
     `import_csv` always rebuilds; a sync reads every file once on a database that
-    predates `log_files`, and nearly all of those are already in it.
+    predates `log_files`, and nearly all of those are already in it. `entries` is
+    the file already read, when the caller has it.
     """
     gid = game_id_from_filename(path) or path.stem
-    offered, n_new = ingest_entries(conn, gid, read_csv(path), source=f"csv:{path.name}")
+    if entries is None:
+        entries = read_csv(path)
+    offered, n_new = ingest_entries(conn, gid, entries, source=f"csv:{path.name}")
     known = conn.execute("SELECT 1 FROM games WHERE game_id = ?", (gid,)).fetchone()
     summary = {"game_id": gid, "file": path.name, "entries_offered": offered, "entries_new": n_new}
     if n_new or not known:
@@ -115,7 +123,8 @@ def sync_folder(
 
     `skip` maps a path to the (mtime_ns, size) it failed to read at; that exact file
     is not retried, so a poller does not log the same broken CSV every few seconds.
-    Failures are added to it.
+    Failures are added to it, and so are logs with no hand in them: read again only
+    once they change.
     """
     out = SyncResult(removed=prune(conn))
     if not folder.is_dir():
@@ -132,7 +141,13 @@ def sync_folder(
         if seen.get(key) == stamp or (skip is not None and skip.get(key) == stamp):
             continue
         try:
-            out.imported.append(import_file(conn, path))
+            entries = read_csv(path)
+            if not has_hands(entries):
+                out.empty.append(str(path))
+                if skip is not None:
+                    skip[key] = stamp
+                continue
+            out.imported.append(import_file(conn, path, entries))
         except (OSError, ValueError, csv.Error) as exc:  # locked, half-written, not a log
             out.failed[str(path)] = str(exc)
             if skip is not None:
@@ -149,3 +164,40 @@ def untracked_games(conn: sqlite3.Connection) -> list[str]:
             " HAVING game_id NOT IN (SELECT game_id FROM log_files) ORDER BY game_id"
         )
     ]
+
+
+def empty_logs(folder: Path) -> list[Path]:
+    """Logs in `folder` with no hand in them. Unreadable files are left out."""
+    out = []
+    for path in sorted(folder.glob(LOG_GLOB)):
+        try:
+            if not has_hands(read_csv(path)):
+                out.append(path)
+        except (OSError, ValueError, csv.Error):
+            continue
+    return out
+
+
+def remove_empty(conn: sqlite3.Connection, folder: Path) -> list[Path]:
+    """Delete the logs in `folder` with no hand in them, and their games if handless.
+
+    Only a game with no hands goes with its file. One that has hands from somewhere
+    else -- a fuller copy imported from another folder -- is left alone, with just
+    the empty file's record dropped. Returns the files deleted.
+    """
+    removed = []
+    for path in empty_logs(folder):
+        gid = game_id_from_filename(path) or path.stem
+        try:
+            path.unlink()
+        except OSError as exc:  # open elsewhere, read-only
+            log.warning("could not delete empty log %s: %s", path, exc)
+            continue
+        removed.append(path)
+        hands = conn.execute("SELECT COUNT(*) FROM hands WHERE game_id = ?", (gid,)).fetchone()[0]
+        if hands == 0:
+            delete_game(conn, gid)
+        else:
+            with writing(conn):
+                conn.execute("DELETE FROM log_files WHERE path = ?", (_key(path),))
+    return removed

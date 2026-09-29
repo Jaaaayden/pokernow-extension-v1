@@ -37,6 +37,17 @@ def game_id_from_filename(path: str | Path) -> str | None:
     return m.group("gid") if m else None
 
 
+#: The line every hand opens with. A log without one holds no hand at all: a table
+#: joined and left before the first deal leaves a file of seat requests, ID changes
+#: and config lines, a few hundred bytes, that would otherwise sit in the log folder
+#: and the database as a game of nothing.
+HAND_START = "-- starting hand #"
+
+
+def has_hands(entries: list[RawEntry]) -> bool:
+    return any(e.entry.startswith(HAND_START) for e in entries)
+
+
 def read_csv(path: str | Path) -> list[RawEntry]:
     """Read an export and return entries sorted by `order` ascending."""
     rows: list[RawEntry] = []

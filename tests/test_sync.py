@@ -220,3 +220,61 @@ def test_cli_sync_prunes_untracked_only_when_asked(tmp_path, folder):
     c = connect(db_path)
     assert sync.untracked_games(c) == []
     assert c.execute("SELECT COUNT(DISTINCT game_id) FROM hands").fetchone()[0] == 2
+
+
+#: A table joined and left before the first deal: the whole log.
+JOINED_AND_LEFT = (
+    "entry,at,order\n"
+    '"The player ""DK @ 6AN-TeA3Jk"" requested a seat.",2026-09-17T02:40:51.200Z,178961285120000\n'
+    '"The game\'s big blind was changed from 20 to 10.",2026-09-17T02:40:30.741Z,178961283074102\n'
+)
+
+
+def test_a_log_with_no_hands_is_not_imported(conn, folder):
+    empty = folder / "poker_now_log_joinedandleft.csv"
+    empty.write_text(JOINED_AND_LEFT, encoding="utf-8")
+
+    out = sync.sync_folder(conn, folder)
+    assert out.empty == [str(empty)]
+    assert {s["game_id"] for s in out.imported} == {HU_GAME, MULTIWAY_GAME}
+    assert _count(conn, "raw_entries", "joinedandleft") == 0
+    assert _count(conn, "games", "joinedandleft") == 0
+
+    # Remembered, like a broken file: a poller does not re-read it until it changes.
+    skip: dict = {}
+    assert sync.sync_folder(conn, folder, skip).empty == [str(empty)]
+    assert sync.sync_folder(conn, folder, skip).empty == []
+
+
+def test_remove_empty_deletes_handless_logs_and_their_games(conn, folder):
+    empty = folder / "poker_now_log_joinedandleft.csv"
+    empty.write_text(JOINED_AND_LEFT, encoding="utf-8")
+    sync.sync_folder(conn, folder)
+    # One imported before logs with no hands were skipped.
+    sync.import_file(conn, empty)
+    assert _count(conn, "games", "joinedandleft") == 1
+
+    assert sync.remove_empty(conn, folder) == [empty]
+    assert not empty.exists()
+    assert _count(conn, "games", "joinedandleft") == 0
+    assert _count(conn, "hands", HU_GAME) == 188  # games with hands are untouched
+    assert (folder / HU.name).exists()
+
+
+def test_sync_cli_removes_empty_logs_only_when_asked(tmp_path, folder):
+    empty = folder / "poker_now_log_joinedandleft.csv"
+    empty.write_text(JOINED_AND_LEFT, encoding="utf-8")
+    db_path = tmp_path / "cli.sqlite"
+    runner = CliRunner()
+
+    r = runner.invoke(cli.app, ["sync", "--db", str(db_path), "--log-dir", str(folder)])
+    assert r.exit_code == 0, r.output
+    assert "1 log(s) with no hands skipped" in r.output
+    assert empty.exists()
+
+    r = runner.invoke(
+        cli.app, ["sync", "--db", str(db_path), "--log-dir", str(folder), "--remove-empty"]
+    )
+    assert r.exit_code == 0, r.output
+    assert f"{empty.name}: no hands, deleted" in r.output
+    assert not empty.exists()

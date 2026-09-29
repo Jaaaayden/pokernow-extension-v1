@@ -142,6 +142,25 @@ def test_live_capture_keeps_a_csv_of_the_game_in_the_log_folder(client):
     assert read_csv(path) == rows
 
 
+def test_live_capture_writes_no_log_until_a_hand_is_dealt(client):
+    """Joining a table and leaving before a deal must not leave a file of nothing."""
+    from pnt.ingest import log_folder
+
+    rows = read_csv(HU)
+    first_hand = next(i for i, e in enumerate(rows) if e.entry.startswith("-- starting hand #"))
+    before, after = rows[:first_hand], rows[first_hand:]
+    assert before, "the sample should have lines ahead of its first hand"
+    wire = lambda es: [{"entry": e.entry, "at": e.at, "order": e.ord} for e in es]
+
+    client.post("/ingest", json={"game_id": "not-dealt-yet", "entries": wire(before)})
+    path = log_folder.log_path(log_folder.LOG_DIR, "not-dealt-yet")
+    assert not path.exists()
+
+    # The first hand writes the file, with the lines from before it.
+    client.post("/ingest", json={"game_id": "not-dealt-yet", "entries": wire(after)})
+    assert read_csv(path) == rows
+
+
 def test_deleting_a_captured_log_removes_the_game_instead_of_rewriting_it(client):
     """Before sync, the next rebuild wrote the whole deleted file back out of the database."""
     from pnt.ingest import log_folder

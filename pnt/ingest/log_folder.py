@@ -15,7 +15,7 @@ import sqlite3
 import threading
 from pathlib import Path
 
-from .csv_source import RawEntry, read_csv
+from .csv_source import RawEntry, has_hands, read_csv
 
 DEFAULT_LOG_DIR = Path.home() / "Downloads" / "pokernow-logs"
 LOG_DIR = Path(os.environ.get("PNT_LOG_DIR") or DEFAULT_LOG_DIR)
@@ -75,11 +75,16 @@ def write_log(entries: list[RawEntry], path: Path) -> int:
 
 
 def save_game(conn: sqlite3.Connection, game_id: str, folder: Path | None = None) -> int:
-    """Write a stored game's raw lines to its CSV in the log folder. Returns lines added."""
+    """Write a stored game's raw lines to its CSV in the log folder. Returns lines added.
+
+    Not until the first hand is dealt: a table joined and left before then would
+    leave a file with nothing in it. Nothing is lost by waiting -- the file is written
+    from every stored line, so the lines before the first hand go in with it.
+    """
     rows = conn.execute(
         "SELECT ord, at, entry FROM raw_entries WHERE game_id = ?", (game_id,)
     ).fetchall()
-    if not rows:
-        return 0
     entries = [RawEntry(ord=r[0], at=r[1], entry=r[2]) for r in rows]
+    if not has_hands(entries):
+        return 0
     return write_log(entries, log_path(folder or LOG_DIR, game_id))

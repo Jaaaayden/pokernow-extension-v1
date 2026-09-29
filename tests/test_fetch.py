@@ -14,9 +14,16 @@ GID = "pgltDzcp7-NBx28QZGFom_fKX"
 
 
 def _game(n: int) -> list[RawEntry]:
-    """n lines, ascending, with orders shaped like the real thing (ms * 100 + seq)."""
+    """n lines, ascending, with orders shaped like the real thing (ms * 100 + seq).
+
+    The first opens a hand: backfill writes nothing for a game no hand was dealt in.
+    """
     return [
-        RawEntry(178900000000000 + i * 100, f"2026-09-10T00:00:{i % 60:02d}.000Z", f"line {i}")
+        RawEntry(
+            178900000000000 + i * 100,
+            f"2026-09-10T00:00:{i % 60:02d}.000Z",
+            "-- starting hand #1 --" if i == 0 else f"line {i}",
+        )
         for i in range(n)
     ]
 
@@ -175,6 +182,16 @@ def test_backfill_writes_into_the_log_folder_and_skips_what_is_there(tmp_path, m
     assert result.exit_code == 0, result.output
     assert "skipped" in result.output
     assert len(log.calls) == 2  # nothing fetched
+
+
+def test_backfill_writes_nothing_for_a_game_with_no_hands(tmp_path, monkeypatch):
+    joined_and_left = [RawEntry(e.ord, e.at, f"seat request {i}") for i, e in enumerate(_game(3))]
+    monkeypatch.setattr(f, "fetch_page", FakeLog(joined_and_left))
+    monkeypatch.setattr(f, "PAUSE", 0)
+    result = CliRunner().invoke(cli.app, ["backfill", GID, "--log-dir", str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert "no hands were dealt" in result.output
+    assert not lf.log_path(tmp_path, GID).exists()
 
 
 def test_backfill_reports_a_bad_game_and_exits_nonzero(tmp_path, monkeypatch):
