@@ -737,6 +737,33 @@ def set_note(
     return note_of(conn, game_id, hand_number)
 
 
+def restore_judgements(conn: sqlite3.Connection, reviewed: list[dict], notes: list[dict]) -> tuple[int, int]:
+    """Copy marks and notes from another database, keeping when each was made.
+
+    What moving between the built-in tracker and the companion carries over, beside
+    the logs and the aliases: `reviewed_marks` and `hand_notes` rows, as dicts.
+    Where both databases have one for the same hand, the earlier mark is kept (it
+    says when you first looked) and the later note (it says when you last wrote),
+    so copying twice changes nothing. Nothing is checked against the hands: a
+    judgement is keyed by the hand's number in its game, and a game copied after it
+    lines up the same. Returns how many of each were given.
+    """
+    with writing(conn):
+        conn.executemany(
+            "INSERT INTO hand_reviews (game_id, hand_number, reviewed_at) VALUES (?, ?, ?)"
+            " ON CONFLICT(game_id, hand_number) DO UPDATE"
+            " SET reviewed_at = MIN(reviewed_at, excluded.reviewed_at)",
+            [(r["game_id"], int(r["hand_number"]), r["reviewed_at"]) for r in reviewed],
+        )
+        conn.executemany(
+            "INSERT INTO hand_notes (game_id, hand_number, note, noted_at) VALUES (?, ?, ?, ?)"
+            " ON CONFLICT(game_id, hand_number) DO UPDATE SET note = excluded.note,"
+            " noted_at = excluded.noted_at WHERE excluded.noted_at > hand_notes.noted_at",
+            [(n["game_id"], int(n["hand_number"]), n["note"], n["noted_at"]) for n in notes],
+        )
+    return len(reviewed), len(notes)
+
+
 # ------------------------------------------------------------------- read ---
 
 

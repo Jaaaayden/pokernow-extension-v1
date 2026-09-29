@@ -36,6 +36,50 @@ MISSED_BLINDS_GAME = "pgl7sRNQr64BIPFwmlFel-Le5"
 TRUNCATED_GAME = "pglkWn5b4Y8whHqWY3tVmrtW1"
 
 
+def local_client(app, **kwargs):
+    """A test client that calls the server the way the extension does.
+
+    The server answers only a Host naming this machine, and refuses a write without
+    the `x-pnt` header (see app.py); TestClient's defaults have neither.
+    """
+    from fastapi.testclient import TestClient
+
+    return TestClient(app, base_url="http://127.0.0.1", headers={"x-pnt": "1"}, **kwargs)
+
+
+class EngineResponse:
+    def __init__(self, status: int, body):
+        self.status_code = status
+        self._body = body
+
+    def json(self):
+        return self._body
+
+
+class EngineClient:
+    """The in-process engine (`pnt.engine`) behind TestClient's calls, so one API
+    test runs against both transports. It goes through `handle_json`, the text-in,
+    text-out door the extension uses, so what it answers has survived being JSON."""
+
+    def __init__(self, engine):
+        self.engine = engine
+
+    def _send(self, method, url, params=None, body=None):
+        import json
+        from urllib.parse import urlencode
+
+        if params:
+            url += ("&" if "?" in url else "?") + urlencode(params)
+        out = json.loads(self.engine.handle_json(method, url, None if body is None else json.dumps(body)))
+        return EngineResponse(out["status"], out["body"])
+
+    def get(self, url, params=None, headers=None):
+        return self._send("GET", url, params)
+
+    def post(self, url, json=None, params=None, headers=None):
+        return self._send("POST", url, params, json)
+
+
 @pytest.fixture(autouse=True)
 def _private_log_folder(tmp_path_factory, monkeypatch):
     """Point the log folder at a temp dir for every test.

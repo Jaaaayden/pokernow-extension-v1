@@ -28,14 +28,21 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
-#: Read at runtime by conn.py, server/app.py and cli.py respectively.
+#: Read at runtime by conn.py, server/app.py and cli.py respectively. The pages are
+#: the extension's, and the server serves the same files.
 REQUIRED = [
     "pnt/db/schema.sql",
-    "pnt/server/static/chart.html",
-    "pnt/server/static/stats.html",
-    "pnt/server/static/allin.html",
-    "pnt/server/static/filter-help.js",
-    "pnt/server/static/replay.js",
+    "pnt/extension/pages/index.html",
+    "pnt/extension/pages/chart.html",
+    "pnt/extension/pages/chart.js",
+    "pnt/extension/pages/stats.html",
+    "pnt/extension/pages/allin.html",
+    "pnt/extension/pages/api.js",
+    "pnt/extension/pages/filter-help.js",
+    "pnt/extension/pages/replay.js",
+    "pnt/extension/offscreen.html",
+    "pnt/extension/engine.worker.js",
+    "pnt/extension/enginehost.mjs",
     "pnt/extension/manifest.json",
     "pnt/extension/content.js",
     "pnt/extension/background.js",

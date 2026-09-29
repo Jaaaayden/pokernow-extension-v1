@@ -399,8 +399,16 @@
   })();
 
   // The toolbar icon, in float mode (in panel mode it opens the panel instead).
+  // `resync`: the tracker behind the background changed or restarted, and may not
+  // have everything this tab sent it. Forgetting the cursor makes the next pass walk
+  // back from the newest line until it meets lines the tracker already has.
   chrome.runtime.onMessage.addListener((msg) => {
     if (msg?.type === "toggle-hud") float.toggle();
+    if (msg?.type === "resync") {
+      state.sync = { cursor: 0, walk: null };
+      state.liveInserted = -1;
+      if (!state.running) schedule(0);
+    }
     return false;
   });
 
@@ -416,7 +424,8 @@
     }
     float.apply();
     const h = await send({ type: "health" });
-    setStatus(h.ok ? `connected · ${h.data.hands} hands in db` : `tracker not reachable at ${state.server}`);
+    const where = h.ok && h.data.backend === "builtin" ? "built-in tracker" : "connected";
+    setStatus(h.ok ? `${where} · ${h.data.hands} hands in db` : `tracker not reachable: ${h.error}`);
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== "sync") return;
       if (changes.server) state.server = changes.server.newValue.replace(/\/+$/, "");

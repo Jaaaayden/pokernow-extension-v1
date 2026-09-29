@@ -66,3 +66,27 @@ def test_explicit_paths_never_reach_the_fallback(tmp_path):
     """Naming a folder and silently getting a different one is worse than an error."""
     with pytest.raises(typer.BadParameter):
         _expand([str(tmp_path)], tmp_path, sample=True)
+
+
+@pytest.mark.parametrize("path", BUNDLED, ids=lambda p: p.stem[-6:])
+def test_every_player_shipped_is_a_stand_in(path):
+    """The people in these logs did not agree to be in a download: every one is
+    replaced (pnt/logfmt/anonymize.py). A log copied in by hand fails here."""
+    import re
+
+    from pnt.logfmt.anonymize import STAND_IN, players_in
+
+    real = [name for name, _ in players_in(path) if not re.fullmatch(STAND_IN, name)]
+    assert real == [], f"{path.name} names players who are not stand-ins"
+
+
+def test_the_alias_file_names_only_ids_the_logs_have():
+    """An ID in aliases.csv that no log mentions was never run through the stand-ins."""
+    import csv
+
+    from pnt.logfmt.anonymize import players_in
+
+    ids = {i for p in BUNDLED for _, i in players_in(p)}
+    with (BUNDLED_LOG_DIR / "aliases.csv").open(encoding="utf-8", newline="") as fh:
+        listed = {r["pn_id"] for r in csv.DictReader(fh)}
+    assert listed <= ids

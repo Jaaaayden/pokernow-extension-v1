@@ -15,6 +15,7 @@ from __future__ import annotations
 import csv
 import re
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -50,15 +51,17 @@ def has_hands(entries: list[RawEntry]) -> bool:
 
 def read_csv(path: str | Path) -> list[RawEntry]:
     """Read an export and return entries sorted by `order` ascending."""
-    rows: list[RawEntry] = []
     with open(path, encoding="utf-8", newline="") as fh:
-        reader = csv.DictReader(fh)
-        missing = {"entry", "at", "order"} - set(reader.fieldnames or ())
-        if missing:
-            raise ValueError(f"{path}: missing required column(s): {sorted(missing)}")
-        for row in reader:
-            rows.append(
-                RawEntry(ord=int(row["order"]), at=row["at"], entry=row["entry"])
-            )
+        return parse_csv(fh, str(path))
+
+
+def parse_csv(lines: Iterable[str], name: str = "export") -> list[RawEntry]:
+    """`read_csv` for an export already in hand -- a file a page read and sent as
+    text (`io.StringIO(text)`). `name` is for the error message."""
+    reader = csv.DictReader(lines)
+    missing = {"entry", "at", "order"} - set(reader.fieldnames or ())
+    if missing:
+        raise ValueError(f"{name}: missing required column(s): {sorted(missing)}")
+    rows = [RawEntry(ord=int(row["order"]), at=row["at"], entry=row["entry"]) for row in reader]
     rows.sort(key=lambda r: r.ord)
     return rows

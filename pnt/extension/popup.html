@@ -21,6 +21,12 @@
   .kv span:nth-child(odd) { color: #898781; }
   .ok { color: #0ca30c; } .bad { color: #d03b3b; }
   a { color: #2a78d6; }
+  .hint { color: #898781; font-size: 12px; margin: 6px 0 0; }
+  .hint:empty { display: none; }
+  code { font: 11.5px ui-monospace, Consolas, monospace; user-select: all; word-break: break-all; }
+  label.check { display: flex; gap: 6px; align-items: center; color: inherit; }
+  label.check input { width: auto; }
+  .hidden { display: none !important; }
 </style>
 </head>
 <body>
@@ -31,8 +37,17 @@
     <option value="panel">Side panel (split screen)</option>
     <option value="float">Floating on the page</option>
   </select>
-  <label for="server">Tracker server</label>
+  <label for="backend" title="Built in: the tracker runs inside the extension, with nothing to install. Companion app: the local server from `pnt setup`, which adds the command line and a log folder kept in sync. Each keeps its own database.">Tracker</label>
+  <select id="backend">
+    <option value="builtin">Built into the extension</option>
+    <option value="companion">Companion app (local server)</option>
+  </select>
+  <label for="server" id="server-label">Companion server</label>
   <input id="server" placeholder="http://127.0.0.1:52000">
+  <p class="hint" id="companion-hint">To have Chrome start it whenever Chrome runs, run once:
+    <code id="connect-cmd">pnt connect</code> <span id="native"></span></p>
+  <label class="check hidden" id="move-row"><input type="checkbox" id="move" checked> Copy my hands to it</label>
+  <p class="hint" id="move-status"></p>
   <label for="poll">Poll every (seconds)</label>
   <input id="poll" type="number" min="2" max="60">
   <label for="livemin" title="A live spot with fewer hands than this is widened to the closest one that has enough.">Min hands for a live spot</label>

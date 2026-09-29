@@ -1,18 +1,27 @@
-"""Service tests. The /ingest contract is fixed here, before the extension exists."""
+"""API tests. The /ingest contract is fixed here, before the extension exists.
+
+`client` runs each test twice: against the HTTP server, and against the in-process
+engine the extension runs on Pyodide (`pnt.engine`). Both serve the one route table
+in `pnt.api`, and this is what keeps them answering alike. `server` is for what only
+an HTTP server has: the static pages, the log folder it keeps, and the checks on
+who may call it.
+"""
 
 from __future__ import annotations
+
+import json
+from pathlib import Path
 
 import pytest
 
 from pnt.ingest.csv_source import read_csv
-from tests.conftest import ALL_LOGS, HU, HU_GAME
+from tests.conftest import ALL_LOGS, HU, HU_GAME, EngineClient, local_client
 
 fastapi = pytest.importorskip("fastapi")
-from fastapi.testclient import TestClient
 
 
 @pytest.fixture()
-def client(tmp_path, monkeypatch):
+def server(tmp_path, monkeypatch):
     monkeypatch.setenv("PNT_DB", str(tmp_path / "api.sqlite"))
     import importlib
 
@@ -27,7 +36,19 @@ def client(tmp_path, monkeypatch):
     for path in ALL_LOGS:
         import_csv(conn, path)
     conn.close()
-    return TestClient(app_module.app)
+    return local_client(app_module.app)
+
+
+@pytest.fixture(params=["server", "engine"])
+def client(request, server, tmp_path):
+    if request.param == "server":
+        yield server
+        return
+    from pnt.engine import Engine
+
+    engine = Engine(tmp_path / "api.sqlite")
+    yield EngineClient(engine)
+    engine.close()
 
 
 def test_live_endpoint_is_quiet_between_hands_and_validates_min(client):
@@ -123,7 +144,7 @@ def test_ingest_new_game_then_query(client, tmp_path):
     assert sum(r["hands"] for r in rows) == 188 * 2  # two seats per heads-up hand
 
 
-def test_live_capture_keeps_a_csv_of_the_game_in_the_log_folder(client):
+def test_live_capture_keeps_a_csv_of_the_game_in_the_log_folder(server):
     """The folder is a running record: a captured game lands there as an export."""
     from pnt.ingest import log_folder
 
@@ -131,18 +152,18 @@ def test_live_capture_keeps_a_csv_of_the_game_in_the_log_folder(client):
     first, rest = rows[:1500], rows[1500:]
     wire = lambda es: [{"entry": e.entry, "at": e.at, "order": e.ord} for e in es]
 
-    client.post("/ingest", json={"game_id": "live-game", "entries": wire(first)})
+    server.post("/ingest", json={"game_id": "live-game", "entries": wire(first)})
     path = log_folder.log_path(log_folder.LOG_DIR, "live-game")
     assert read_csv(path) == first
 
     # The extension's history walk: ingest without rebuilding, then rebuild once.
-    client.post("/ingest", json={"game_id": "live-game", "entries": wire(rest), "rebuild": False})
+    server.post("/ingest", json={"game_id": "live-game", "entries": wire(rest), "rebuild": False})
     assert read_csv(path) == first  # nothing written until the game is rebuilt
-    client.post("/rebuild/live-game")
+    server.post("/rebuild/live-game")
     assert read_csv(path) == rows
 
 
-def test_live_capture_writes_no_log_until_a_hand_is_dealt(client):
+def test_live_capture_writes_no_log_until_a_hand_is_dealt(server):
     """Joining a table and leaving before a deal must not leave a file of nothing."""
     from pnt.ingest import log_folder
 
@@ -152,48 +173,48 @@ def test_live_capture_writes_no_log_until_a_hand_is_dealt(client):
     assert before, "the sample should have lines ahead of its first hand"
     wire = lambda es: [{"entry": e.entry, "at": e.at, "order": e.ord} for e in es]
 
-    client.post("/ingest", json={"game_id": "not-dealt-yet", "entries": wire(before)})
+    server.post("/ingest", json={"game_id": "not-dealt-yet", "entries": wire(before)})
     path = log_folder.log_path(log_folder.LOG_DIR, "not-dealt-yet")
     assert not path.exists()
 
     # The first hand writes the file, with the lines from before it.
-    client.post("/ingest", json={"game_id": "not-dealt-yet", "entries": wire(after)})
+    server.post("/ingest", json={"game_id": "not-dealt-yet", "entries": wire(after)})
     assert read_csv(path) == rows
 
 
-def test_deleting_a_captured_log_removes_the_game_instead_of_rewriting_it(client):
+def test_deleting_a_captured_log_removes_the_game_instead_of_rewriting_it(server):
     """Before sync, the next rebuild wrote the whole deleted file back out of the database."""
     from pnt.ingest import log_folder
 
     wire = [{"entry": e.entry, "at": e.at, "order": e.ord} for e in read_csv(HU)]
-    client.post("/ingest", json={"game_id": "deleted-game", "entries": wire})
+    server.post("/ingest", json={"game_id": "deleted-game", "entries": wire})
     path = log_folder.log_path(log_folder.LOG_DIR, "deleted-game")
     path.unlink()
 
-    client.post("/rebuild/deleted-game")
+    server.post("/rebuild/deleted-game")
     assert not path.exists()
-    assert client.get("/stats", params={"game": "deleted-game"}).json() == []
+    assert server.get("/stats", params={"game": "deleted-game"}).json() == []
 
 
-def test_saving_logs_can_be_turned_off(client, monkeypatch):
+def test_saving_logs_can_be_turned_off(server, monkeypatch):
     from pnt.ingest import log_folder
     from pnt.server import app as app_module
 
     monkeypatch.setattr(app_module, "SAVE_LOGS", False)
     entries = [{"entry": e.entry, "at": e.at, "order": e.ord} for e in read_csv(HU)]
-    client.post("/ingest", json={"game_id": "unsaved", "entries": entries})
+    server.post("/ingest", json={"game_id": "unsaved", "entries": entries})
     assert not log_folder.log_path(log_folder.LOG_DIR, "unsaved").exists()
-    assert client.get("/health").json()["log_folder"] is None
+    assert server.get("/health").json()["log_folder"] is None
 
 
-def test_a_log_folder_that_cannot_be_written_never_fails_capture(client, monkeypatch, tmp_path):
+def test_a_log_folder_that_cannot_be_written_never_fails_capture(server, monkeypatch, tmp_path):
     from pnt.ingest import log_folder
 
     blocker = tmp_path / "not-a-folder"
     blocker.write_text("a file where the folder should be")
     monkeypatch.setattr(log_folder, "LOG_DIR", blocker)
     entries = [{"entry": e.entry, "at": e.at, "order": e.ord} for e in read_csv(HU)]
-    r = client.post("/ingest", json={"game_id": "still-captured", "entries": entries})
+    r = server.post("/ingest", json={"game_id": "still-captured", "entries": entries})
     assert r.status_code == 200
     assert r.json()["hands"] == 188
 
@@ -277,17 +298,27 @@ def test_range_endpoint_validates_input(client):
     assert client.get("/players/genericpoker/range", params={"by": "sideways"}).status_code == 422
 
 
-def test_chart_page_is_served(client):
-    r = client.get("/chart")
-    assert r.status_code == 200
-    assert r.headers["content-type"].startswith("text/html")
-    assert "/range" in r.text, "the page must read from the range endpoint"
-    assert "/sizing" in r.text and "/hands" in r.text
-    assert "hands-sort" in r.text, "the hand list can be ordered by pot size"
-    assert 'data-view="review"' in r.text and 'data-view="beats"' in r.text
-    assert "/review" in r.text and "review-sort" in r.text, "the review views order by recency and pot"
-    assert 'data-view="session"' in r.text and "session-game" in r.text and "/games" in r.text
-    assert "review-split" in r.text, "the list views can put the replay beside the list"
+def _page(server, path: str, script: str) -> str:
+    """A page as served, with its own script: an extension page may run no inline
+    script, so what a page does lives in the file beside it."""
+    r = server.get(path)
+    assert r.status_code == 200 and r.headers["content-type"].startswith("text/html")
+    assert f'src="{script}"' in r.text
+    js = server.get(f"/{script}")
+    assert js.status_code == 200 and js.headers["content-type"].startswith("text/javascript")
+    return r.text + js.text
+
+
+def test_chart_page_is_served(server):
+    text = _page(server, "/chart", "chart.js")
+    assert server.get("/chart.html").text == server.get("/chart").text
+    assert "/range" in text, "the page must read from the range endpoint"
+    assert "/sizing" in text and "/hands" in text
+    assert "hands-sort" in text, "the hand list can be ordered by pot size"
+    assert 'data-view="review"' in text and 'data-view="beats"' in text
+    assert "/review" in text and "review-sort" in text, "the review views order by recency and pot"
+    assert 'data-view="session"' in text and "session-game" in text and "/games" in text
+    assert "review-split" in text, "the list views can put the replay beside the list"
 
 
 def test_sizing_endpoint(client):
@@ -384,30 +415,30 @@ def test_player_stats_endpoint(client):
     assert client.get("/players/genericpoker/stats", params={"filter": "nope"}).status_code == 400
 
 
-def test_stats_serves_json_to_scripts_and_a_page_to_browsers(client):
+def test_stats_serves_json_to_scripts_and_a_page_to_browsers(server):
     """The HUD and curl must keep getting JSON from /stats; a browser gets the page."""
-    assert isinstance(client.get("/stats").json(), list)
-    assert isinstance(client.get("/stats", headers={"accept": "application/json"}).json(), list)
-    page = client.get("/stats", headers={"accept": "text/html,application/xhtml+xml"})
+    assert isinstance(server.get("/stats").json(), list)
+    assert isinstance(server.get("/stats", headers={"accept": "application/json"}).json(), list)
+    page = server.get("/stats", headers={"accept": "text/html,application/xhtml+xml"})
     assert page.headers["content-type"].startswith("text/html")
-    assert "/chart?" in page.text, "the page must link back to the range chart"
-    direct = client.get("/stats.html")
+    assert "chart.html?" in _page(server, "/stats.html", "stats.js"), "the page must link back to the range chart"
+    direct = server.get("/stats.html")
     assert direct.status_code == 200 and direct.text == page.text
 
 
-def test_spot_help_lists_every_term(client):
-    body = client.get("/filters").json()
+def test_spot_help_lists_every_term(server):
+    body = server.get("/filters").json()
     assert {"groups", "positions", "sizes", "textures", "operators"} <= set(body)
     assert any(t["term"] == "vs=NAME" for g in body["groups"] for t in g["terms"])
-    script = client.get("/filter-help.js")
+    script = server.get("/filter-help.js")
     assert script.status_code == 200
     assert script.headers["content-type"].startswith("text/javascript")
     for page in ("/chart", "/stats.html", "/allin.html"):
-        assert "/filter-help.js" in client.get(page).text
+        assert 'src="filter-help.js"' in server.get(page).text
 
 
-def test_chart_page_links_to_the_stats_page(client):
-    assert "/stats.html" in client.get("/chart").text
+def test_chart_page_links_to_the_stats_page(server):
+    assert '"stats.html?' in _page(server, "/chart", "chart.js")
 
 
 @pytest.fixture()
@@ -417,18 +448,22 @@ def fast_sampling(monkeypatch):
     monkeypatch.setattr(equity, "SAMPLES", 2000)
 
 
-def test_allin_serves_json_to_scripts_and_a_page_to_browsers(client, fast_sampling):
+def test_allin_endpoint(client, fast_sampling):
     rows = client.get("/allin").json()
     assert rows
     assert {"player", "hands", "net_bb", "adjusted_bb", "diff_bb", "by_street", "skipped"} <= set(rows[0])
     fewer = client.get("/allin", params={"min_hands": 5}).json()
     assert 0 < len(fewer) <= len(rows) and all(r["hands"] >= 5 for r in fewer)
     assert client.get("/allin", params={"filter": "nope"}).status_code == 400
-    page = client.get("/allin", headers={"accept": "text/html"})
+
+
+def test_allin_serves_a_page_to_browsers(server, fast_sampling):
+    page = server.get("/allin", headers={"accept": "text/html"})
     assert page.headers["content-type"].startswith("text/html")
-    assert client.get("/allin.html").text == page.text
-    assert "/players/" in page.text and "/allin" in page.text
-    assert "hands-sort" in page.text, "the hand list can be ordered by pot size and by swing"
+    assert server.get("/allin.html").text == page.text
+    text = _page(server, "/allin.html", "allin.js")
+    assert "/players/" in text and "/allin" in text
+    assert "hands-sort" in text, "the hand list can be ordered by pot size and by swing"
 
 
 def test_player_allin_drilldown(client, fast_sampling):
@@ -459,20 +494,20 @@ def test_player_review(client, fast_sampling):
     assert vs["hands"] and all("Chris" in h["vs"] for h in vs["hands"])
 
 
-def test_the_replay_renderer_is_one_script_shared_by_both_pages(client):
-    script = client.get("/replay.js")
+def test_the_replay_renderer_is_one_script_shared_by_both_pages(server):
+    script = server.get("/replay.js")
     assert script.status_code == 200
     assert script.headers["content-type"].startswith("text/javascript")
     assert "pntReplay" in script.text
     for page in ("/chart", "/allin.html"):
-        assert "/replay.js" in client.get(page).text
-    assert "function renderReplay" not in client.get("/chart").text
+        assert 'src="replay.js"' in server.get(page).text
+    assert "function renderReplay" not in _page(server, "/chart", "chart.js")
 
 
-def test_the_front_door_links_every_page(client):
-    text = client.get("/").text
-    for href in ("/stats.html", "/chart", "/players.html", "/allin.html", "/chart?by=review"):
-        assert href in text
+def test_the_front_door_links_every_page(server):
+    text = server.get("/").text
+    for href in ("stats.html", "chart.html", "players.html", "allin.html", "pots.html", "chart.html?by=review"):
+        assert f'href="{href}"' in text
 
 
 def test_marking_a_hand_reviewed_round_trips_and_reaches_the_review(client):
@@ -569,3 +604,58 @@ def test_session_hands_carry_play_marks_and_notes(client):
     mine = next(r for r in again if r["hand_id"] == hand["hand_id"])
     assert mine["reviewed"] and mine["reviewed_at"] and mine["note"] == "fold the river"
     assert sum(r["reviewed"] for r in again) == 1
+
+
+# ---- what may reach the server ------------------------------------------------
+# A local database with no auth: see the middleware notes in app.py.
+
+
+def test_a_game_id_that_is_not_one_is_refused(client):
+    """The ID names a file in the log folder, so `..` or a slash would escape it."""
+    assert client.post("/ingest", json={"game_id": r"..\..\escape", "entries": []}).status_code == 422
+    assert client.post("/ingest", json={"game_id": "../escape", "entries": []}).status_code == 422
+    assert client.post("/rebuild/..%5Cescape").status_code == 422
+    assert client.get("/hud/a.b").status_code == 422
+    assert client.get("/live/a.b").status_code == 422
+
+    from pnt.ingest.log_folder import log_path
+
+    with pytest.raises(ValueError):
+        log_path(Path("logs"), "../escape")
+
+
+def test_writes_need_the_header(server):
+    """A page in any other tab can send a POST to 127.0.0.1; CORS only hides the
+    answer. A body-less POST needs no content type, and a no-cors fetch of a Blob
+    sends none, so the header -- which no page can add cross-site -- is what
+    stops both, whatever FastAPI's content-type handling does."""
+    body = json.dumps({"game_id": "csrf-probe", "entries": []})
+    bare = local_client(server.app)
+    bare.headers.pop("x-pnt")
+    assert bare.post("/ingest", content=body).status_code == 403
+    assert bare.post("/rebuild/csrf-probe").status_code == 403
+    assert bare.get("/health").status_code == 200  # reads need nothing
+    assert server.post("/ingest", json=json.loads(body)).status_code == 200
+
+
+@pytest.mark.parametrize(
+    "origin, status",
+    [
+        ("https://evil.example", 403),
+        ("https://www.pokernow.com", 403),
+        ("null", 403),
+        ("chrome-extension://abcdefghijklmnop", 200),
+        ("http://127.0.0.1:52000", 200),  # the server's own pages
+    ],
+)
+def test_writes_from_a_foreign_origin_are_refused(server, origin, status):
+    r = server.post("/ingest", json={"game_id": "origin-probe", "entries": []}, headers={"origin": origin})
+    assert r.status_code == status
+
+
+def test_only_this_machine_may_be_named_as_host(server):
+    """A DNS-rebinding page reaches 127.0.0.1 under its own name, and is refused."""
+    from fastapi.testclient import TestClient
+
+    assert TestClient(server.app, base_url="http://evil.example").get("/health").status_code == 400
+    assert TestClient(server.app, base_url="http://localhost").get("/health").status_code == 200

@@ -1,0 +1,211 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>All-in EV</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7; --surface: #fcfcfb; --ink: #0b0b0b; --ink-2: #52514e; --muted: #898781;
+    --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,0.10); --mid: #f0efec; --accent: #2a78d6;
+    --up: #1f7a4d; --down: #b93a39;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+      --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --mid: #383835; --accent: #3987e5;
+      --up: #4cc38a; --down: #e66e6d;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --mid: #383835; --accent: #3987e5;
+    --up: #4cc38a; --down: #e66e6d;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--page); color: var(--ink); font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  main { max-width: 1100px; margin: 0 auto; padding: 20px 20px 48px; }
+  h1 { font-size: 18px; font-weight: 600; margin: 0 0 12px; }
+  h1 small { color: var(--muted); font-weight: 400; margin-left: 8px; }
+  h2 { font-size: 15px; font-weight: 600; margin: 0; }
+  h2 small { color: var(--muted); font-weight: 400; margin-left: 6px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+  .controls label { color: var(--ink-2); font-size: 13px; }
+  select, input, button { font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--axis); border-radius: 6px; padding: 5px 8px; }
+  input[type=text] { min-width: 0; flex: 1 1 300px; font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+  input[type=number] { width: 5.5em; }
+  button { cursor: pointer; }
+  button.primary { background: var(--accent); color: #fff; border-color: transparent; }
+  .seg { display: inline-flex; border: 1px solid var(--axis); border-radius: 6px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; background: transparent; padding: 5px 10px; color: var(--ink-2); }
+  .seg button[aria-pressed=true] { background: var(--accent); color: #fff; }
+  a.link { color: var(--accent); text-decoration: none; margin-left: auto; font-size: 13px; }
+  a.link ~ a.link { margin-left: 12px; }
+  .note { color: var(--ink-2); font-size: 13px; margin: 0 0 14px; max-width: 82ch; }
+  .note p { margin: 0 0 4px; }
+  .note ul { margin: 0; padding-left: 18px; }
+  .note li { margin: 2px 0; }
+  .note b, .note strong { color: var(--ink); font-weight: 600; }
+  .card { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; padding: 8px 12px 12px; overflow-x: auto; }
+  .card.loading { opacity: .45; transition: opacity .15s; }
+  .card-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin: 4px 0 8px; flex-wrap: wrap; }
+  .card-head .ctl { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  th, td { text-align: right; padding: 6px 8px; border-bottom: 1px solid var(--grid); white-space: nowrap; }
+  th:first-child, td:first-child { text-align: left; position: sticky; left: 0; background: var(--surface); }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; cursor: pointer; user-select: none; }
+  th:hover { color: var(--ink); }
+  th[aria-sort] { color: var(--ink); }
+  th .dir { font-size: 10px; margin-left: 2px; }
+  th.group { color: var(--ink-2); border-bottom: 0; padding-bottom: 0; text-align: center; }
+  td.name a { color: var(--ink); text-decoration: none; }
+  td.name a:hover { color: var(--accent); text-decoration: underline; }
+  td.dim { color: var(--muted); }
+  td.up { color: var(--up); }
+  td.down { color: var(--down); }
+  tr:hover td, tr:hover td:first-child { background: var(--mid); }
+  tr[aria-selected=true] td, tr[aria-selected=true] td:first-child { background: var(--mid); }
+  .err { color: #d03b3b; margin: 12px 0; }
+  .muted { color: var(--muted); }
+  .crumb { margin-bottom: 12px; font-size: 13px; }
+  .crumb a { color: var(--accent); text-decoration: none; }
+  .crumb a:hover { text-decoration: underline; }
+  .key { margin-top: 14px; font-size: 13px; color: var(--ink-2); }
+  .key summary { cursor: pointer; color: var(--accent); width: fit-content; }
+  .key dl { display: grid; grid-template-columns: max-content 1fr; gap: 6px 14px;
+    margin: 10px 0 0; padding: 12px 14px; background: var(--surface);
+    border: 1px solid var(--ring); border-radius: 10px; }
+  .key dt { font-weight: 600; color: var(--ink); white-space: nowrap; }
+  .key dd { margin: 0; }
+  @media (max-width: 620px) { .key dl { grid-template-columns: 1fr; gap: 2px 0; } .key dd { margin: 0 0 8px; } }
+
+  /* --- drill-down: graph, hand list, replay --- */
+  #detail { margin-top: 14px; }
+  .graph { width: 100%; }
+  .graph svg { display: block; width: 100%; height: auto; max-height: 300px; }
+  .graph .actual { fill: none; stroke: var(--ink); stroke-width: 1.8; }
+  .graph .adjusted { fill: none; stroke: var(--accent); stroke-width: 1.8; }
+  .graph .zero { stroke: var(--axis); stroke-width: 1; }
+  .graph .guide { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; }
+  .graph text { fill: var(--muted); font-size: 11px; font-family: system-ui, sans-serif; }
+  .graph .dot { fill: var(--surface); stroke-width: 1.8; }
+  .graph .dot.actual { stroke: var(--ink); }
+  .graph .dot.adjusted { stroke: var(--accent); }
+  .legend { display: flex; gap: 16px; font-size: 12px; color: var(--ink-2); margin: 4px 0 8px; align-items: center; flex-wrap: wrap; }
+  .legend i { display: inline-block; width: 18px; height: 0; border-top: 2px solid var(--ink); vertical-align: middle; margin-right: 6px; }
+  .legend i.adjusted { border-color: var(--accent); }
+  .legend .cap { margin-left: auto; font-variant-numeric: tabular-nums; }
+  .hand-rows { display: flex; flex-direction: column; max-height: 380px; overflow-y: auto; }
+  .hand-row {
+    display: flex; flex-wrap: wrap; gap: 2px 14px; align-items: baseline; text-align: left;
+    border: 0; border-bottom: 1px solid var(--grid); border-radius: 0; background: transparent;
+    padding: 6px 4px; font-variant-numeric: tabular-nums;
+  }
+  .hand-row:hover, .hand-row[aria-pressed=true] { background: var(--mid); }
+  .hand-row .num { min-width: 4.5em; color: var(--muted); }
+  .hand-row .street { min-width: 4.5em; color: var(--ink-2); }
+  .hand-row .vs { min-width: 9em; color: var(--ink-2); }
+  .hand-row .board { min-width: 10em; color: var(--ink-2); }
+  .hand-row .board .rest { color: var(--muted); }
+  .hand-row .eq { min-width: 4.5em; }
+  .hand-row .pot { min-width: 5.5em; color: var(--ink-2); }
+  .hand-row .money { min-width: 6em; margin-left: auto; text-align: right; }
+  .hand-row .money small { color: var(--muted); }
+  .hand-row .up { color: var(--up); }
+  .hand-row .down { color: var(--down); }
+  .cards { font-family: ui-monospace, Consolas, monospace; }
+  .replay { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--grid); font-size: 13px; }
+  .replay h3 { font-size: 14px; margin: 0 0 4px; }
+  .replay h3 small { color: var(--muted); font-weight: 400; margin-left: 6px; }
+  .replay .who { color: var(--ink-2); margin: 0 0 6px; }
+  .replay .street { margin-top: 10px; }
+  .replay .street > b { text-transform: capitalize; }
+  .replay .street > span { color: var(--muted); margin-left: 8px; }
+  .replay ol { margin: 4px 0 0; padding-left: 22px; }
+  .replay li.forced { color: var(--muted); }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <div class="crumb" id="crumb"><a href="index.html">&lsaquo; tracker</a></div>
+  <h1>All-in EV <small id="subtitle">what the jams were worth, against what they took</small></h1>
+
+  <div class="controls">
+    <label for="filter">Spot</label>
+    <input id="filter" type="text" placeholder="position=BTN,3bet_pot" spellcheck="false">
+    <label for="minhands">Min hands</label>
+    <input id="minhands" type="number" min="1" step="1" value="5">
+    <button class="primary" id="apply">Apply</button>
+    <span class="seg" id="unitseg" role="group" aria-label="Unit">
+      <button data-unit="bb" aria-pressed="true">bb</button>
+      <button data-unit="chips" aria-pressed="false">chips</button>
+    </span>
+    <a class="link" id="statslink" href="stats.html">stats &rsaquo;</a>
+    <a class="link" id="chartlink" href="chart.html">range chart &rsaquo;</a>
+    <a class="link" href="players.html">players &rsaquo;</a>
+  </div>
+
+  <div class="note">
+    <p>Every all-in showdown where every live hand was shown. <strong>Adjusted</strong> is what
+      the player's equity was worth when the betting stopped; <strong>Actual</strong> is what they
+      took; the <strong>Diff</strong> is the deck's contribution.</p>
+    <ul>
+      <li>Positive diff ran <b>above</b> expectation, negative <b>below</b>. Within one hand the
+        diffs cancel: nobody's luck comes from nowhere.</li>
+      <li>Flop, turn and river all-ins are enumerated exactly. Preflop is sampled (50,000 deals,
+        marked <b>~</b> in the hand list). A river all-in has cards to come, so its diff is 0.</li>
+      <li>Hands where a live player mucked are counted as skipped, not guessed at. All-ins
+        nobody called are not showdowns and are not here.</li>
+      <li>A dozen jams say almost nothing; the diff swings by a whole stack per hand.</li>
+      <li>Click a player for their cumulative actual and adjusted lines and the hands behind them.</li>
+    </ul>
+  </div>
+  <div class="err hidden" id="err"></div>
+
+  <div class="card" id="card"><div id="table"></div></div>
+
+  <section class="card hidden" id="detail" aria-live="polite">
+    <div class="card-head">
+      <h2><span id="detail-title"></span> <small id="detail-count"></small></h2>
+      <span class="ctl">
+        <select id="hands-sort" aria-label="Order">
+          <option value="newest">newest first</option>
+          <option value="pot">biggest pot first</option>
+          <option value="swing">biggest swing first</option>
+        </select>
+        <button id="detail-close">Close</button>
+      </span>
+    </div>
+    <div class="legend">
+      <span><i></i>actual</span><span><i class="adjusted"></i>adjusted</span>
+      <span class="cap" id="graph-caption"></span>
+    </div>
+    <div class="graph" id="graph"></div>
+    <div class="hand-rows" id="hand-rows"></div>
+    <div class="replay hidden" id="replay"></div>
+  </section>
+
+  <details class="key" id="key">
+    <summary>What the columns mean</summary>
+    <dl>
+      <dt>Hands</dt><dd>All-in showdowns they were part of and still in at the end, with every live hand known.</dd>
+      <dt>Eq%</dt><dd>Their average share of the pot at the moment the betting stopped.</dd>
+      <dt>Actual</dt><dd>Net chips over those hands, the same figure every other page prints.</dd>
+      <dt>Adjusted</dt><dd>Net chips had every pot been split by equity instead of dealt out.</dd>
+      <dt>Diff</dt><dd>Actual minus adjusted. Above zero ran good, below ran bad.</dd>
+      <dt>Preflop … River</dt><dd>The diff split by the street the betting stopped on. Hover for that street's hands, actual and adjusted.</dd>
+      <dt>~</dt><dd>In the hand list: a preflop equity, sampled rather than enumerated.</dd>
+    </dl>
+  </details>
+</main>
+
+<script src="api.js"></script>
+<script src="replay.js"></script>
+<script src="allin.js"></script>
+<script src="filter-help.js"></script>
+</body>
+</html>

@@ -1,0 +1,432 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Range chart</title>
+<style>
+  :root {
+    color-scheme: light;
+    --page: #f9f9f7;
+    --surface: #fcfcfb;
+    --ink: #0b0b0b;
+    --ink-2: #52514e;
+    --muted: #898781;
+    --grid: #e1e0d9;
+    --axis: #c3c2b7;
+    --ring: rgba(11,11,11,0.10);
+    --mid: #f0efec;
+    --accent: #2a78d6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+      --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --mid: #383835; --accent: #3987e5;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --page: #0d0d0d; --surface: #1a1a19; --ink: #ffffff; --ink-2: #c3c2b7; --muted: #898781;
+    --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --mid: #383835; --accent: #3987e5;
+  }
+  * { box-sizing: border-box; }
+  /* Thin scrollbars in the theme's own greys, with no track and no arrow buttons.
+     Inherited, so the inner scrollers (hand rows, the grid, the side list) match. */
+  :root { scrollbar-width: thin; scrollbar-color: var(--axis) transparent; }
+  body {
+    margin: 0; background: var(--page); color: var(--ink);
+    font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  main { max-width: 960px; margin: 0 auto; padding: 20px 20px 48px; }
+  h1 { font-size: 18px; font-weight: 600; margin: 0 0 12px; }
+  h1 small { color: var(--muted); font-weight: 400; margin-left: 8px; }
+
+  /* --- one filter row above everything it scopes --- */
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
+  .controls label { color: var(--ink-2); font-size: 13px; }
+  select, input[type=text], input[type=number], button {
+    font: inherit; color: var(--ink); background: var(--surface);
+    border: 1px solid var(--axis); border-radius: 6px; padding: 5px 8px;
+  }
+  input[type=text] { min-width: 0; flex: 1 1 320px; font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
+  input[type=number] { width: 6.5em; font-variant-numeric: tabular-nums; }
+  .controls.narrow { margin-top: -6px; }
+  .controls.narrow .lbl { color: var(--muted); font-size: 12px; margin-right: 8px; }
+  button { cursor: pointer; }
+  button.primary { background: var(--accent); color: #fff; border-color: transparent; }
+  .seg { display: inline-flex; border: 1px solid var(--axis); border-radius: 6px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; background: transparent; padding: 5px 10px; color: var(--ink-2); }
+  .seg button[aria-pressed=true] { background: var(--accent); color: #fff; }
+  .presets { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 14px; }
+  .presets button { font-size: 12px; padding: 3px 8px; border-radius: 999px; color: var(--ink-2); }
+  .presets button:hover { border-color: var(--muted); }
+  .presets button[aria-pressed=true] { background: var(--accent); color: #fff; border-color: transparent; }
+  .presets .lbl { color: var(--muted); font-size: 12px; align-self: center; margin-right: 2px; }
+  .presets .sep { width: 1px; background: var(--grid); margin: 0 4px; }
+  .lines .presets { margin-bottom: 6px; }
+  .lines { margin-bottom: 14px; }
+  .lines .lbl { min-width: 6.5em; }
+  .tile .k small { color: var(--muted); }
+
+  /* --- stat tiles --- */
+  .tiles { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+  .tile { background: var(--surface); border: 1px solid var(--ring); border-radius: 8px; padding: 10px 14px; min-width: 150px; flex: 1 1 150px; }
+  .tile .v { font-size: 24px; font-weight: 600; line-height: 1.1; }
+  .tile .k { color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .tile.warn .v { color: var(--ink-2); }
+  .tile.pick { cursor: pointer; text-align: left; font: inherit; color: inherit; }
+  .tile.pick:hover { border-color: var(--muted); }
+  .note { color: var(--ink-2); font-size: 13px; margin: 0 0 14px; max-width: 72ch; }
+
+  /* --- chart card --- */
+  .card { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px; padding: 16px; }
+  .card.loading { opacity: .45; transition: opacity .15s; }
+  .card-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; flex-wrap: wrap; }
+  .card-head h2 { font-size: 14px; font-weight: 600; margin: 0; }
+  .card-head .ctl { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+
+  .grid-wrap { overflow-x: auto; }
+  .grid { display: grid; grid-template-columns: repeat(13, 1fr); gap: 2px; background: var(--surface); min-width: 520px; }
+  .cell {
+    aspect-ratio: 1 / 1; border-radius: 4px; padding: 4px 5px; position: relative;
+    display: flex; flex-direction: column; justify-content: space-between;
+    background: var(--mid); color: var(--ink); cursor: default; outline: 0;
+    font-variant-numeric: tabular-nums;
+  }
+  .cell.pick { cursor: pointer; }
+  .cell.empty { background: transparent; box-shadow: inset 0 0 0 1px var(--grid); color: var(--muted); }
+  .cell.empty .n { visibility: hidden; }
+  .cell.on-dark { color: #ffffff; }
+  .cell.on-light { color: #0b0b0b; }
+  .cell:hover, .cell:focus-visible { box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--ink); z-index: 1; }
+  .cell .l { font-size: 12px; font-weight: 600; letter-spacing: .01em; }
+  .cell .n { font-size: 15px; font-weight: 500; align-self: flex-end; }
+  @media (max-width: 720px) { .cell .l { font-size: 10px; } .cell .n { font-size: 12px; } }
+
+  .scale { display: flex; align-items: center; gap: 10px; margin-top: 12px; color: var(--ink-2); font-size: 12px; flex-wrap: wrap; }
+  .scale .bar { display: flex; gap: 2px; }
+  .scale .bar i { display: block; width: 22px; height: 12px; border-radius: 2px; }
+
+  /* --- composition bars --- */
+  .bars { display: grid; grid-template-columns: max-content 1fr max-content; gap: 6px 12px; align-items: center; }
+  .bars .lab { text-align: right; color: var(--ink-2); white-space: nowrap; }
+  .bars .lab.detail { padding-left: 14px; color: var(--muted); font-size: 13px; }
+  .bars .pick { cursor: pointer; }
+  .bars .lab.pick:hover, .bars .lab.pick:focus-visible { color: var(--ink); text-decoration: underline; outline: 0; }
+  .bars .track { height: 14px; background: transparent; position: relative; }
+  .bars .fill { height: 100%; border-radius: 0 4px 4px 0; background: var(--accent); min-width: 2px; }
+  .bars .fill.detail { background: var(--accent); opacity: .45; height: 10px; margin-top: 2px; }
+  .bars .val { font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .bars .val small { color: var(--muted); margin-left: 6px; }
+
+  /* --- sizing blocks --- */
+  .sizing { display: flex; flex-direction: column; gap: 18px; }
+  .block h3 { font-size: 13px; font-weight: 600; margin: 0 0 8px; display: flex; gap: 4px 10px; flex-wrap: wrap; align-items: baseline; }
+  .block h3 small { color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; }
+  .block h3 button { font-size: 12px; padding: 1px 8px; border-radius: 999px; color: var(--ink-2); }
+  .block.none { opacity: .5; }
+  .block .bars { padding-left: 4px; }
+
+  table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; margin-top: 12px; }
+  th, td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--grid); }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  td.detail { padding-left: 24px; color: var(--ink-2); }
+  tr.pick { cursor: pointer; }
+  tr.pick:hover td { background: var(--mid); }
+  tr.pick:focus-visible { outline: 2px solid var(--ink); outline-offset: -2px; }
+  tr.pick td:first-child::after { content: " ›"; color: var(--muted); }
+  #table { overflow-x: auto; }
+
+  /* --- hand list and replay --- */
+  #hands { margin-top: 14px; }
+  .hand-rows { display: flex; flex-direction: column; max-height: 360px; overflow-y: auto; }
+  .hand-row {
+    display: flex; flex-wrap: wrap; gap: 2px 14px; align-items: baseline; text-align: left;
+    border: 0; border-bottom: 1px solid var(--grid); border-radius: 0; background: transparent;
+    padding: 6px 4px; font-variant-numeric: tabular-nums;
+  }
+  .hand-row:hover, .hand-row[aria-pressed=true] { background: var(--mid); }
+  .hand-row .num { min-width: 4.5em; color: var(--muted); }
+  .hand-row .pos { min-width: 3.2em; color: var(--ink-2); }
+  .hand-row .vs { min-width: 6em; max-width: 11em; overflow: hidden; text-overflow: ellipsis;
+    white-space: nowrap; color: var(--ink-2); }
+  .hand-row .hole { min-width: 4em; }
+  .hand-row .board { min-width: 9em; color: var(--ink-2); }
+  .hand-row .pot { min-width: 5.5em; color: var(--ink-2); }
+  .hand-row .sizes { flex: 1; color: var(--muted); font-size: 12px; }
+  .hand-row .net { margin-left: auto; }
+  .hand-rows.tall { max-height: 560px; }
+  .hand-row .kind { font-size: 11px; padding: 0 7px; border: 1px solid var(--axis); border-radius: 999px;
+    color: var(--ink-2); white-space: nowrap; }
+  .hand-row .kind[data-group=beat] { border-color: var(--accent); color: var(--accent); }
+  .hand-row .why { flex-basis: 100%; color: var(--ink-2); font-size: 12px; }
+  /* A flagged row, its "reviewed" mark and its note. Both buttons sit beside the
+     row, not in it: the row is itself a button, and a button may not contain
+     another. The note runs full width underneath, in the second column. */
+  .rev-row { display: flex; align-items: flex-start; gap: 6px; border-bottom: 1px solid var(--grid); }
+  .rev-row .marks { flex: none; display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+  .rev-body { flex: 1; min-width: 0; }
+  .rev-row .hand-row { width: 100%; border-bottom: 0; }
+  .rev-row .marks button { width: 22px; height: 22px; padding: 0; line-height: 1;
+    border-radius: 6px; color: var(--muted); font-size: 12px; }
+  .rev-row .marks button[aria-pressed=true] { color: var(--accent); border-color: var(--accent); }
+  /* Marked rows stay in place and step back, so the list keeps its shape. A note
+     never fades: it is the one thing on the row you wrote yourself. */
+  .rev-row[data-reviewed=true] .hand-row { opacity: .5; }
+  .rev-row[data-reviewed=true] .hand-row:hover { opacity: 1; }
+  .rev-note { font-size: 12px; color: var(--ink-2); margin: 0 0 6px; padding-left: 2px;
+    white-space: pre-wrap; overflow-wrap: anywhere; border-left: 2px solid var(--accent); padding: 2px 0 2px 8px; }
+  .rev-note.empty { display: none; }
+  .rev-edit { display: flex; flex-direction: column; gap: 4px; margin: 0 0 8px; }
+  .rev-edit textarea { width: 100%; min-height: 3.4em; resize: vertical; font: inherit; font-size: 12px;
+    color: var(--ink); background: var(--surface); border: 1px solid var(--ring); border-radius: 6px; padding: 6px 8px; }
+  .rev-edit .hint { color: var(--muted); font-size: 11px; }
+  #review-count { margin: 0 0 6px; font-size: 12px; }
+  .kinds { display: inline-flex; flex-wrap: wrap; gap: 4px; }
+  .kinds button { font-size: 12px; padding: 3px 8px; border-radius: 999px; color: var(--ink-2); }
+  .kinds button[aria-pressed=true] { background: var(--accent); color: #fff; border-color: transparent; }
+  /* The list views' on/off switches (Played only, Hide reviewed, Side by side). */
+  #reviewctl > button[aria-pressed=true] { color: var(--accent); border-color: var(--accent); }
+  .kinds button small { opacity: .8; margin-left: 4px; }
+  .cards { font-family: ui-monospace, Consolas, monospace; }
+  .replay { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--grid); font-size: 13px; }
+  .replay h3 { font-size: 14px; margin: 0 0 4px; }
+  .replay h3 small { color: var(--muted); font-weight: 400; margin-left: 6px; }
+  .replay .who { color: var(--ink-2); margin: 0 0 6px; }
+  .replay .street { margin-top: 10px; }
+  .replay .street > b { text-transform: capitalize; }
+  .replay .street > span { color: var(--muted); margin-left: 8px; }
+  .replay ol { margin: 4px 0 0; padding-left: 22px; }
+  .replay li.forced { color: var(--muted); }
+  .muted { color: var(--muted); }
+
+  /* --- side by side: the list on the left, the replay on the right ---
+     The replay pane sticks to the top of the window and scrolls on its own, so
+     clicking down a list never moves the page. The page widens to make room.
+     Narrow (the extension side panel, a small window) it stacks again. */
+  body.wide main { max-width: 1400px; }
+  #review.split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 16px; align-items: start; }
+  #review.split #review-count { grid-column: 1 / -1; }
+  #review.split .hand-rows.tall { max-height: calc(100vh - 140px); }
+  #review.split .replay { position: sticky; top: 12px; margin-top: 0; padding: 0 0 0 16px; border-top: 0;
+    border-left: 1px solid var(--grid); max-height: calc(100vh - 24px); overflow-y: auto; }
+  @media (max-width: 900px) {
+    body.wide main { max-width: 960px; }
+    #review.split { display: block; }
+    #review.split .hand-rows.tall { max-height: 560px; }
+    #review.split .replay { position: static; margin-top: 12px; padding: 12px 0 0; border-left: 0;
+      border-top: 1px solid var(--grid); max-height: none; }
+  }
+
+  /* --- postflop strip --- */
+  .strip { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px;
+    padding: 10px 14px 12px; margin-bottom: 16px; overflow-x: auto; }
+  .strip-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; margin-bottom: 8px; }
+  .strip-head b { font-size: 13px; font-weight: 600; }
+  .strip-head a { color: var(--accent); text-decoration: none; font-size: 12px; }
+  .strip-grid { display: grid; grid-template-columns: 3.5em repeat(4, minmax(4.5em, max-content)) 1fr;
+    gap: 3px 16px; font-variant-numeric: tabular-nums; font-size: 13px; min-width: 640px; }
+  .strip-grid .h { color: var(--muted); font-size: 12px; }
+  .strip-grid .st { color: var(--ink-2); text-transform: capitalize; }
+  .strip-grid .mix { color: var(--muted); font-size: 12px; }
+
+  .tip {
+    position: fixed; pointer-events: none; z-index: 10; display: none;
+    background: var(--surface); color: var(--ink); border: 1px solid var(--ring);
+    border-radius: 8px; padding: 8px 10px; box-shadow: 0 6px 20px rgba(0,0,0,.18);
+    font-size: 13px; min-width: 150px;
+  }
+  .tip .big { font-size: 18px; font-weight: 600; }
+  .tip .row { display: flex; justify-content: space-between; gap: 16px; color: var(--ink-2); }
+  .tip .row b { color: var(--ink); font-weight: 500; }
+  .err { color: #d03b3b; margin: 12px 0; }
+  .crumb { margin-bottom: 12px; font-size: 13px; }
+  .crumb a { color: var(--accent); text-decoration: none; }
+  .crumb a:hover { text-decoration: underline; }
+  .hidden { display: none !important; }
+
+  /* Narrow: the extension's side panel embeds this page a few hundred pixels
+     wide. The grid shrinks to the width instead of scrolling sideways -- the
+     cell text scales with it -- and the legend puts its bar on a row of its own,
+     stretched across, with the two ends labelled underneath. The controls come
+     down to the side panel's own 11px so the page reads as part of it.
+     `minmax(0, 1fr)`: a plain 1fr column will not shrink below its label, which
+     pushed the last column a few pixels past the edge. The page is not to scroll
+     sideways at all -- everything wide has a scroller of its own -- since a
+     nudge sideways hides the left edge of every control. */
+  @media (max-width: 600px) {
+    html, body { overflow-x: hidden; }
+    body { font-size: 12px; }
+    main { padding: 8px 8px 32px; }
+    .crumb { font-size: 11px; margin-bottom: 6px; }
+    h1 { font-size: 14px; margin-bottom: 8px; }
+    h1 small { font-size: 11px; margin-left: 4px; }
+
+    .controls { gap: 4px 6px; margin-bottom: 8px; }
+    .controls label, .controls.narrow .lbl { font-size: 11px; }
+    .controls.narrow { margin-top: -2px; }
+    select, input[type=text], input[type=number], button { font-size: 11px; padding: 2px 6px; border-radius: 5px; }
+    input[type=text] { font-size: 11px; flex-basis: 200px; }
+    input[type=number] { width: 5em; }
+    .seg { border-radius: 5px; }
+    .seg button { padding: 2px 7px; }
+    .presets { gap: 3px; margin-bottom: 8px; }
+    .presets button { font-size: 10px; padding: 1px 6px; }
+    .presets .lbl { font-size: 10px; }
+    .lines { margin-bottom: 8px; }
+    .lines .presets { margin-bottom: 3px; }
+    .lines .lbl { min-width: 5.5em; }
+    .block h3 button { font-size: 10px; padding: 0 6px; }
+
+    .tiles { gap: 6px; margin-bottom: 8px; }
+    .tile { padding: 5px 8px; min-width: 100px; flex-basis: 100px; border-radius: 6px; }
+    .tile .v { font-size: 16px; }
+    .tile .k { font-size: 10px; }
+    .note { font-size: 11px; margin-bottom: 8px; }
+    .strip { padding: 6px 8px 8px; margin-bottom: 8px; }
+    .strip-grid { font-size: 11px; gap: 2px 10px; }
+    .strip-head b { font-size: 12px; }
+    .strip-head a { font-size: 11px; }
+    .bars { font-size: 11px; gap: 3px 8px; }
+    .bars .lab.detail { font-size: 10px; }
+    table { font-size: 11px; }
+    th, td { padding: 3px 5px; }
+    th { font-size: 10px; }
+    .hand-row { gap: 1px 8px; padding: 4px 2px; font-size: 11px; }
+    .hand-row .kind, .hand-row .why, .kinds button { font-size: 10px; }
+    .kinds button { padding: 1px 6px; }
+    .replay { font-size: 11px; }
+    .tip { font-size: 11px; }
+
+    .card { padding: 8px; border-radius: 8px; }
+    .card-head { gap: 6px; margin-bottom: 6px; }
+    .card-head h2 { font-size: 12px; }
+    .grid { min-width: 0; gap: 1px; grid-template-columns: repeat(13, minmax(0, 1fr)); }
+    .cell { padding: 1px 2px; border-radius: 2px; min-width: 0; overflow: hidden; }
+    .cell .l { font-size: clamp(7px, 2.1vw, 11px); letter-spacing: 0; }
+    .cell .n { font-size: clamp(8px, 2.5vw, 13px); }
+    .scale { gap: 2px 8px; justify-content: space-between; font-size: 10px; margin-top: 6px; }
+    .scale .bar { order: -1; flex: 1 1 100%; gap: 1px; }
+    .scale .bar i { flex: 1 1 0; width: auto; height: 8px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <div class="crumb" id="crumb"><a href="index.html">&lsaquo; tracker</a></div>
+  <h1>Range chart <small id="subtitle">what a player had in a spot, from the hands where it was shown</small></h1>
+
+  <div class="controls">
+    <label for="player">Player</label>
+    <select id="player"></select>
+    <label for="filter">Spot</label>
+    <input id="filter" type="text" placeholder="srp,pot>=500,vs=henry" spellcheck="false">
+    <button class="primary" id="apply">Apply</button>
+    <button id="clear" title="back to all hands">Clear</button>
+    <span class="seg" role="group" aria-label="View">
+      <button data-view="preflop" aria-pressed="true">Preflop chart</button>
+      <button data-view="made" aria-pressed="false">Made hands</button>
+      <button data-view="sizing" aria-pressed="false">Sizing</button>
+      <button data-view="review" aria-pressed="false" title="hands worth a replay: missed bluffs, missed value, failed bluffs">Hand review</button>
+      <button data-view="beats" aria-pressed="false" title="suckouts and coolers">Bad beats</button>
+      <button data-view="session" aria-pressed="false" title="every hand of one session, flagged or not">Session</button>
+    </span>
+  </div>
+  <div class="controls narrow">
+    <label for="pot">Pot ≥</label>
+    <input id="pot" type="number" min="0" step="1" placeholder="any" title="final pot, in chips (writes pot>=N into the spot)">
+    <span class="lbl">chips</span>
+    <label for="vs">vs</label>
+    <select id="vs" title="hands where this player was still in when they last acted (writes vs=name into the spot)">
+      <option value="">anyone</option>
+    </select>
+  </div>
+  <div class="presets" id="presets"></div>
+  <div class="lines" id="lines"></div>
+  <div class="lines" id="jams"></div>
+  <div class="presets textures" id="textures"><span class="lbl">Flop</span></div>
+
+  <div class="tiles">
+    <button type="button" class="tile pick" id="t-hands-tile" title="list these hands">
+      <div class="v" id="t-hands">–</div><div class="k" id="t-hands-k">hands in this spot ›</div></button>
+    <div class="tile"><div class="v" id="t-known">–</div><div class="k" id="t-known-k">cards known</div></div>
+    <div class="tile warn"><div class="v" id="t-cov">–</div><div class="k" id="t-cov-k">coverage</div></div>
+    <div class="tile"><div class="v" id="t-raise">–</div><div class="k" id="t-raise-k">usual preflop raise</div></div>
+  </div>
+  <p class="note" id="note">Cards are known only when a hand is shown, and hands are shown when they reach showdown.
+    The hands that folded out of this spot are the ones missing. Read coverage first.</p>
+  <div class="strip hidden" id="strip"></div>
+  <div class="err hidden" id="err"></div>
+
+  <section class="card" id="card">
+    <div class="card-head">
+      <h2 id="card-title">Starting hands</h2>
+      <span class="seg" id="colorseg" role="group" aria-label="Color by">
+        <button data-color="net" aria-pressed="true">Net won</button>
+        <button data-color="pfr" aria-pressed="false">Raise %</button>
+        <button data-color="size" aria-pressed="false">Raise size</button>
+      </span>
+      <span class="ctl hidden" id="sizingctl">
+        <select id="street" aria-label="Street">
+          <option value="flop">flop</option>
+          <option value="turn">turn</option>
+          <option value="river">river</option>
+        </select>
+        <select id="kind" aria-label="Which bets">
+          <option value="cbet">their c-bets</option>
+          <option value="bet">all their bets</option>
+          <option value="faced_cbet">c-bets they faced</option>
+        </select>
+      </span>
+      <span class="ctl hidden" id="reviewctl">
+        <span class="kinds" id="review-kinds" role="group" aria-label="Which flags"></span>
+        <select id="session-game" class="hidden" aria-label="Session"></select>
+        <button id="session-played" class="hidden" aria-pressed="true" title="leave out the hands that were only a preflop fold">Played only</button>
+        <select id="review-sort" aria-label="Order">
+          <option value="hand">hand order</option>
+          <option value="newest">newest first</option>
+          <option value="pot">biggest pot first</option>
+          <option value="swing">biggest swing first</option>
+        </select>
+        <button id="review-seen" aria-pressed="false" title="hide the hands already marked reviewed">Hide reviewed</button>
+        <button id="review-split" aria-pressed="false" title="list on the left, replay on the right">Side by side</button>
+      </span>
+      <button id="tabletoggle" aria-pressed="false">Table</button>
+    </div>
+    <div class="grid-wrap" id="grid-wrap"><div id="grid" class="grid" role="grid" aria-label="Starting hand chart"></div></div>
+    <div id="scale" class="scale"></div>
+    <div id="bars" class="bars hidden"></div>
+    <div id="sizing" class="sizing hidden"></div>
+    <div id="table" class="hidden"></div>
+    <div id="review" class="hidden" aria-live="polite">
+      <p class="muted" id="review-count"></p>
+      <div class="hand-rows tall" id="review-rows"></div>
+      <div class="replay hidden" id="review-replay"></div>
+    </div>
+  </section>
+
+  <section class="card hidden" id="hands" aria-live="polite">
+    <div class="card-head">
+      <h2><span id="hands-title">Hands</span> <small class="muted" id="hands-count"></small></h2>
+      <span class="ctl">
+        <select id="hands-sort" aria-label="Order">
+          <option value="newest">newest first</option>
+          <option value="pot">biggest pot first</option>
+        </select>
+        <button id="hands-close">Close</button>
+      </span>
+    </div>
+    <div class="hand-rows" id="hand-rows"></div>
+    <div class="replay hidden" id="replay"></div>
+  </section>
+</main>
+<div class="tip" id="tip" role="tooltip"></div>
+
+<script src="api.js"></script>
+<script src="replay.js"></script>
+<script src="chart.js"></script>
+<script src="filter-help.js"></script>
+</body>
+</html>

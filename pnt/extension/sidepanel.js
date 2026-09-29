@@ -7,8 +7,9 @@
  * panel opened mid-game fills in at once and switching tabs switches games.
  *
  * Each seat is a card rather than a table row: the panel is narrow. A card can
- * open that player's range chart, embedded from the local server underneath;
- * the chart follows the live action (spot.js decides whom and when).
+ * open that player's range chart underneath -- the extension's own chart page,
+ * which reads whichever tracker is chosen -- and the chart follows the live
+ * action (spot.js decides whom and when).
  */
 (() => {
   "use strict";
@@ -24,7 +25,6 @@
   });
 
   const state = {
-    server: "http://127.0.0.1:52000",
     tabId: null,
     snap: null,         // the latest report from the tab on show
     game: null,
@@ -94,9 +94,6 @@
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "session" && state.tabId != null && keyOf(state.tabId) in changes) {
       show(changes[keyOf(state.tabId)].newValue || null);
-    }
-    if (area === "sync" && changes.server) {
-      state.server = String(changes.server.newValue || state.server).replace(/\/+$/, "");
     }
   });
 
@@ -176,9 +173,9 @@
     const q = new URLSearchParams({ player, theme: "dark" });
     if (filter) q.set("filter", filter);
     for (const k of ["by", "street", "kind"]) if (view?.[k]) q.set(k, view[k]);
-    return `${state.server}/chart?${q}`;
+    return `${chrome.runtime.getURL("pages/chart.html")}?${q}`;
   }
-  const origin = () => new URL(state.server).origin;
+  const origin = () => location.origin;
   const isOpen = () => !$("chart").hidden;
 
   // The chart page fetches its data once. When the player on show has played more
@@ -562,8 +559,6 @@
     try { compact = localStorage.getItem("pnt-compact") === "1"; } catch {}
     setCompact(compact);
     updateWho();
-    const s = await send({ type: "settings" });
-    if (s.ok) state.server = s.data.server;
     await track();
   })();
 })();

@@ -12,15 +12,15 @@ import pytest
 
 pytest.importorskip("fastapi")
 
-from fastapi.testclient import TestClient
 
 from pnt.stats.queries import report
-from tests.conftest import ALL_LOGS
+from tests.conftest import ALL_LOGS, EngineClient, local_client
 
 
-@pytest.fixture()
-def api(tmp_path, monkeypatch):
-    """The API over a throwaway database, never the real one.
+@pytest.fixture(params=["server", "engine"])
+def api(request, tmp_path, monkeypatch):
+    """The API over a throwaway database, never the real one: the HTTP server, and
+    the in-process engine the extension runs (see test_api.py).
 
     It opens its own connections through PNT_DB rather than being handed one:
     FastAPI runs sync endpoints in a worker thread, and a SQLite connection may
@@ -41,7 +41,14 @@ def api(tmp_path, monkeypatch):
     for log in ALL_LOGS:
         import_csv(conn, log)
     conn.close()
-    return TestClient(app_module.app), path
+    if request.param == "server":
+        yield local_client(app_module.app), path
+        return
+    from pnt.engine import Engine
+
+    engine = Engine(path)
+    yield EngineClient(engine), path
+    engine.close()
 
 
 @pytest.fixture()

@@ -19,6 +19,23 @@ is the manual. Exact stat definitions and thresholds are in
 
 ## Getting hands in
 
+Live capture records every game you open from the moment the extension is
+installed. For games played before that, the extension's front page (⚙ →
+**tracker ↗**) has an **Add hands** section. Every way in dedupes on each line's
+order, so adding the same game twice is harmless.
+
+- **Drop exports on it.** PokerNow's "download full log" files, named as PokerNow
+  names them (`poker_now_log_<game id>.csv`). A log with no hand in it is skipped.
+- **Watch a folder.** Pick the folder your exports download to. New and changed
+  files are imported whenever the page opens. After a Chrome restart, Chrome asks
+  once more before the extension may read the folder.
+- **Fetch by link.** Paste game links, one per line. Games are read from PokerNow at
+  the pace live capture uses, about a minute each, so keep the page open. Your own
+  hole cards come with them when Chrome sends your PokerNow login with the request.
+- **Try it with sample data**, while the tracker is empty: the bundled corpus below.
+
+The rest of this section is the companion app's log folder and CLI.
+
 ### The log folder
 
 Keep every PokerNow export in one folder, and a bare `pnt import` picks up whatever
@@ -82,8 +99,9 @@ topped up later.
 ### The bundled sample
 
 With no exports of its own to import, `pnt setup` loads the
-[bundled sample corpus](../pnt/logs): 5,257 real hands, so the first page you open
-is not an empty one. Those are someone else's games, and setup says so.
+[bundled sample corpus](../pnt/logs): 6,631 real hands with every player replaced
+by a stand-in, so the first page you open is not an empty one. Those are someone
+else's games, and setup says so.
 `--no-sample` leaves the database empty for live capture to fill.
 
 `pnt import` falls back to the same corpus when the log folder is empty. The

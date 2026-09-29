@@ -164,7 +164,129 @@ back from one the user typed.
 The websocket trigger (`gC` / `gameResult`) is deliberately not used. A 5-second
 poll is fast enough for a HUD and survives a PokerNow socket change.
 
+## One API, two transports
+
+Every JSON route is declared once, in [`pnt/api.py`](../pnt/api.py): its path, its
+parameters with their limits, and a handler that returns plain data or raises
+`ApiError`. Two things serve that table:
+
+- **`pnt/server/app.py`** mounts each route on FastAPI. It adds only what an HTTP
+  server on this machine needs: the static pages, the log-folder sync thread, and
+  the checks on who may call it.
+- **`pnt/engine.py`** answers the same routes in-process, with no web framework. It
+  is for the copy of the tracker that runs inside the extension on Pyodide when no
+  server is installed. Requests go in as text and answers come out as text
+  (`handle_json`), so nothing but strings crosses between JavaScript and Python.
+
+Input checks (a game ID's shape, `min >= 1`, `by` in `preflop|made`) live in
+`api.py` as plain Python rather than FastAPI annotations, so both transports refuse
+exactly the same requests. Nothing `api.py` or `engine.py` imports may need more
+than the standard library or start a thread, because Pyodide has neither;
+`test_engine.py` checks that.
+
+### The built-in tracker
+
+`scripts/build_extension.py` builds the extension people install (`dist/extension/`).
+It adds Pyodide, from the pinned npm release checked against npm's integrity hash,
+and the engine's Python as `engine/pnt.zip`. The Web Store does not allow loading
+code from anywhere else, so both are copied into the package.
+`pnt/extension/` on its own has neither and is the companion-only extension that
+`pnt extension` prints.
+
+- **Where it runs.** A service worker cannot start a Web Worker and is stopped
+  whenever it goes quiet. So `background.js` opens an offscreen document
+  (`offscreen.html`) on the first request. That document starts
+  `engine.worker.js`, which runs `enginehost.mjs`: Pyodide, the engine, and the
+  database. After five quiet minutes with no game tab open, it saves and closes.
+- **Where the data is.** Python's sqlite3 in Pyodide can only reach Emscripten's
+  in-memory file system, so the database lives there while the engine runs. It
+  is saved whole to the extension's private file storage (OPFS). `createWritable`
+  swaps the new file in only on close, so a save cut short leaves the last one
+  whole. The engine keeps SQLite's journal in memory (`journal_mode=MEMORY`):
+  with WAL, recent commits would sit in a second file the save never copies.
+- **When it saves.** A merge, rename, note or review mark is saved within a
+  second, because nothing could rebuild it. Captured lines wait up to 30 s. If
+  the engine stops before saving them, the background sends every game tab a
+  `resync` when the engine next starts. The tab forgets its cursor and walks
+  PokerNow's log back to lines the engine has, so the gap fills from PokerNow.
+- **Which tracker.** `backend` in the ⚙ settings is `builtin` or `companion`. A
+  fresh install starts on `auto`, which settles on first use: the companion if
+  one answers, else the built-in tracker. After that it never switches by
+  itself, because that would split one evening's hands across two databases. An
+  update from a version without the built-in tracker is set to `companion`, since
+  that is where its hands are.
+
+### The pages
+
+The dashboard pages (stats, chart, review, all-in, pots, players) live in
+`pnt/extension/pages/`. The same files are the extension's own pages and the
+companion server's (`app.py` serves them from there), so there is one copy. Three
+rules let one set of files work under both origins:
+
+- **Links are relative.** `chart.html?player=…` works under
+  `chrome-extension://…/pages/` and under `127.0.0.1:52000/`.
+- **Every request goes through `api.js`.** `pntFetch` is a plain `fetch` on the
+  server. In the extension it is a message to the background worker, which sends
+  it to whichever tracker is chosen. The side panel frames the extension's
+  `chart.html`, so the chart works the same with either tracker.
+- **No inline script.** Manifest V3 forbids inline scripts, inline event handlers
+  and `javascript:` URLs in extension pages, so each page's script is the `.js`
+  file beside it.
+
+`test_pages.py` checks all three rules.
+
+### Measured on Pyodide
+
+Measured 2026-09-28 on a real database of 10,434 hands in 43 games (35 MB). The
+same script ran on CPython 3.11 and on Pyodide 314.0.7 (Python 3.14, SQLite 3.39,
+built in) under Node 22. Times are in milliseconds:
+
+| | CPython 3.11 | Pyodide |
+|---|--:|--:|
+| boot Pyodide + import the engine | – | 1,900 |
+| `/live` (hand in progress) | 13 | 11 |
+| `/live` after one new line | 3 | 3 |
+| ingest one line | 0.3 | 0.2 |
+| `/hud` warm | 77 | 94 |
+| `/hud` first call after startup | 3,253 | 3,450 |
+| `/hud` after a rebuild (every hand) | 235 | 290 |
+| `/live` after a rebuild | 5 | 5 |
+| range chart | 315 | 339 |
+| tags | 465 | 353 |
+| review | 3,309 | 3,481 |
+| rebuild the biggest game (9,631 lines) | 166 | 213 |
+| ingest that game as new, then rebuild | 196 | 316 |
+
+WebAssembly costs little here: Pyodide's newer Python makes up most of the gap.
+
+`/hud` after a rebuild used to cost the same as the first call, about 3 s. It
+re-derived every hand in the database twice: once for the lifetime report and
+once for each seated player's tags. A rebuild follows every hand. The server hid
+this behind its threads, but the engine has one thread, so a `/live` sent during
+that `/hud` would have waited 3 s. Now both caches are built from per-game
+pieces, keyed on a stamp (`games.derived_gen`) that a rebuild sets on its own
+game only:
+- the lifetime report is summed from each game's counts (a `Tally`);
+- each player's facts are kept per game.
+
+After a hand, only that game is derived again. Only the first call after startup
+still derives everything.
+
 ## Background server
+
+Two things can keep the companion server running, and they can be installed side by
+side: whichever starts first serves, and the other stands by.
+
+- **Chrome itself** (`pnt connect`, all platforms). `pnt/native.py` registers a
+  native messaging host, `com.pokernow.tracker`, allowed to talk to the extension
+  IDs it was given. While the extension's tracker is the companion, its background
+  worker keeps a port open to the host. Chrome starts `python -m pnt.native`, which
+  runs the server in-process until the port closes. An open port also keeps the
+  service worker alive, so the server lasts exactly as long as the browser. Stdout
+  is Chrome's message channel (length-prefixed JSON), so everything else the host
+  prints goes to `~/.pnt/server.log`.
+- **Task Scheduler** (`pnt service`, Windows), described below: always on, whether
+  Chrome is open or not.
 
 `pnt service install` registers a Task Scheduler task for your Windows user. The
 server starts hidden at every login and restarts itself after a crash, with no
@@ -194,6 +316,15 @@ terminal and no admin rights. It is built this way for these reasons:
   launcher) and no measurable CPU. The server only works when the extension posts.
   Stopping or restarting the task takes the launcher's child down with it, so
   nothing is left holding the port.
+- **Only this machine and the extension get in.** The server has no login, and any
+  page open in the browser can send requests to 127.0.0.1. So it grants no CORS
+  (the extension's background worker reads answers through its host permission;
+  PokerNow's own pages never need to). It answers only a `Host` of `127.0.0.1` or
+  `localhost` (or the `--host` it was started with), which stops DNS rebinding. It
+  refuses any write without an `x-pnt` header or from a foreign `Origin`: no page
+  can add a custom header cross-site without a preflight the server never grants.
+  A game ID must match `[A-Za-z0-9_-]{1,64}`, because it becomes a file name in the
+  log folder. `test_api.py` pins all four.
 
 ### Why setup is one command
 
@@ -234,7 +365,8 @@ refuses to point at the folder they live in.
 
 ```bash
 pytest -q
-node --test pnt/extension/normalize.test.mjs pnt/extension/pager.test.mjs pnt/extension/spot.test.mjs
+python scripts/build_extension.py   # enginehost.test.mjs runs the built Pyodide
+node --test pnt/extension/*.test.mjs
 ```
 
 The Python suite is organized around invariants rather than examples:
@@ -268,6 +400,11 @@ The Python suite is organized around invariants rather than examples:
   deferred transaction that reads before it writes cannot upgrade, and SQLite
   refuses it *without* consulting `busy_timeout`. Every write therefore goes through
   `writing()`, which takes the lock up front with `BEGIN IMMEDIATE`.
+- `test_api.py` and `test_identity_api.py` run every API case twice, once against
+  the HTTP server and once against the in-process engine, so the two cannot drift.
 
-The three node test files cover the extension: response normalization, backwards
-paging, and the follow rules in `spot.js`.
+The node test files cover the extension: response normalization, backwards
+paging, the table watch, and the follow rules in `spot.js`. `enginehost.test.mjs`
+runs the built-in tracker on real Pyodide: it captures a game, checks when it saves
+and that reads never do, and restarts from the save. It is skipped until the
+extension has been built.

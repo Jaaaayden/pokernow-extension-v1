@@ -12,10 +12,12 @@ from pathlib import Path
 
 import typer
 
+from . import native
 from . import service as svc
 from .db.conn import DEFAULT_DB, connect
 from .ingest import fetch as fetchmod
 from .ingest import sync as syncmod
+from .ingest.csv_source import HAND_START, has_hands, read_csv
 from .ingest.importer import (
     apply_aliases,
     delete_game,
@@ -26,8 +28,8 @@ from .ingest.importer import (
     rename_player,
     split_identities,
 )
-from .ingest.csv_source import HAND_START, has_hands, read_csv
 from .ingest.log_folder import LOG_DIR, SAVE_LOGS, log_path, write_log
+from .logfmt import anonymize as anon
 from .logfmt import redact as rd
 from .stats.allin import allin_report
 from .stats.filters import parse_filter
@@ -55,6 +57,12 @@ service_app = typer.Typer(
 app.add_typer(service_app, name="service")
 
 DbOpt = typer.Option(DEFAULT_DB, "--db", help="Path to the tracker database.")
+#: Shown in the extension's settings. Plain words, not the gear icon: a Windows
+#: console cannot print it.
+ExtensionIdArg = typer.Argument(None, help="The extension's ID, shown in its settings.")
+ExtensionIdOpt = typer.Option(
+    None, "--extension-id", help="Let this extension start the server (see `pnt connect`)."
+)
 
 #: LOG_DIR (from `ingest/log_folder.py`, shared with the server's live record) is
 #: where PokerNow exports are kept when you do not say. One folder, so `pnt import`
@@ -91,6 +99,12 @@ SampleOpt = typer.Option(
 )
 AuditOpt = typer.Option(
     False, "--audit", help="Check files for unshown hole cards instead of writing."
+)
+AnonymizeOpt = typer.Option(
+    False, "--anonymize", help="Also replace every player and game ID with a stand-in."
+)
+AnonAliasesOpt = typer.Option(
+    None, "--aliases", help="With --anonymize: an alias CSV to carry over (`pnt alias export`)."
 )
 AliasOpt = typer.Option(..., "--alias", help="Name for the player they move to.")
 AliasFileArg = typer.Argument(
@@ -408,6 +422,7 @@ def setup(
     service: bool = typer.Option(True, help="Also install the always-on background server."),
     log_dir: Path | None = LogDirOpt,
     sample: bool = SampleOpt,
+    extension_id: list[str] = ExtensionIdOpt,
 ) -> None:
     """First run: create the database, import any logs, start the server.
 
@@ -444,6 +459,10 @@ def setup(
         typer.echo(f"no {LOG_GLOB} in {folder} -- skipping import (live capture will fill it)")
 
     hands = connect(db).execute("SELECT COUNT(*) FROM hands").fetchone()[0]
+
+    if extension_id or native.STORE_EXTENSION_ID:
+        typer.echo("")
+        connect_cmd(extension_id=list(extension_id or []), db=db, host=host, port=port)
 
     if service and sys.platform == "win32":
         service_install(db=db, host=host, port=port)
@@ -1054,6 +1073,8 @@ def redact(
     out: Path = OutOpt,
     log_dir: Path | None = LogDirOpt,
     audit: bool = AuditOpt,
+    anonymize: bool = AnonymizeOpt,
+    aliases: Path | None = AnonAliasesOpt,
 ) -> None:
     """Write publishable copies of your logs with your unshown hole cards removed.
 
@@ -1067,6 +1088,10 @@ def redact(
 
     `--audit` skips writing and checks files instead. Run it on the folder you are
     about to commit; anything it prints is a hand you did not show.
+
+    `--anonymize` also replaces every player's name and PokerNow ID, and each game's
+    ID, with stand-ins (pnt/logfmt/anonymize.py): for logs going to people who were
+    not at the table. `--aliases` carries an alias file across with them.
     """
     folder = log_dir or LOG_DIR
     expanded = _expand(paths, folder)
@@ -1088,13 +1113,27 @@ def redact(
             f"--out {out} is where the originals live; pick a different folder"
         )
 
+    import tempfile
+
     hero_hands = kept = 0
-    for path in expanded:
-        src = Path(path)
-        p = rd.redact_file(src, out / src.name)
-        hero_hands += p.hero_hands
-        kept += p.kept
-        typer.echo(f"{src.name}: removed {p.dropped} of {p.hero_hands} hole-card entries")
+    # Anonymized, the redacted copies are a step on the way: they go to a scratch
+    # folder, and only their anonymized versions reach --out.
+    with tempfile.TemporaryDirectory() as scratch:
+        stage = Path(scratch) if anonymize else out
+        names = anon.Pseudonyms()
+        for path in expanded:
+            src = Path(path)
+            p = rd.redact_file(src, stage / src.name)
+            hero_hands += p.hero_hands
+            kept += p.kept
+            typer.echo(f"{src.name}: removed {p.dropped} of {p.hero_hands} hole-card entries")
+            if anonymize:
+                anon.anonymize_file(stage / src.name, out, names)
+        if anonymize:
+            typer.echo(f"anonymized {len(names.ids)} player ID(s) and {len(names.names)} name(s)")
+            if aliases:
+                n = anon.anonymize_aliases(aliases, out / "aliases.csv", names)
+                typer.echo(f"carried {n} alias row(s) over to {out / 'aliases.csv'}")
 
     leaks = [line for f in sorted(out.glob(LOG_GLOB)) for line in rd.audit(f)]
     if leaks:  # redact_file already refuses to write a partial redaction
@@ -1133,6 +1172,36 @@ def _svc(fn, *args, **kwargs):
     except svc.ServiceError as exc:
         typer.echo(f"error: {exc}", err=True)
         raise typer.Exit(1) from exc
+
+
+@app.command("connect")
+def connect_cmd(
+    extension_id: list[str] = ExtensionIdArg,
+    db: Path = DbOpt,
+    host: str = svc.DEFAULT_HOST,
+    port: int = svc.DEFAULT_PORT,
+) -> None:
+    """Let the extension start this server itself, whenever Chrome is running.
+
+    Registers `pnt` with Chrome as a native messaging host. With the extension's
+    tracker set to the companion, Chrome then runs the server while it is open,
+    on Windows, macOS and Linux alike, with no Task Scheduler task. It can sit
+    beside `pnt service`: whichever starts first serves, the other stands by.
+    Re-run to add another extension ID or change --db or --port.
+    """
+    out = _svc(native.install, list(extension_id or []), db, host, port)
+    typer.echo(f"registered {native.HOST_NAME} for {len(out['ids'])} extension(s): {', '.join(out['ids'])}")
+    typer.echo(f"  database: {out['db']}")
+    for where in out["registered"]:
+        typer.echo(f"  {where}")
+    typer.echo("\nIn the extension's settings, set Tracker to 'Companion app'. Chrome starts the server from then on.")
+
+
+@app.command("disconnect")
+def disconnect_cmd() -> None:
+    """Undo `pnt connect`: Chrome no longer starts the server. The database is untouched."""
+    removed = native.uninstall()
+    typer.echo("\n".join(f"removed {r}" for r in removed) if removed else "not registered")
 
 
 @service_app.command("install")

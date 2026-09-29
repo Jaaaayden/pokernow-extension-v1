@@ -72,6 +72,8 @@ def run_server(db: Path, host: str, port: int, **uvicorn_options) -> None:
     """Run the API in this process until it stops. Shared by `pnt serve` and the task."""
     # The app reads PNT_DB once, at import, so this must be set before uvicorn loads it.
     os.environ["PNT_DB"] = str(db)
+    # The app only answers requests whose Host names this machine; `--host` adds one.
+    os.environ["PNT_HOST"] = host
     import uvicorn
 
     uvicorn.run("pnt.server.app:app", host=host, port=port, **uvicorn_options)

@@ -19,8 +19,10 @@ Other PokerNow HUDs show you a VPIP number. This shows you the spot.
 | Range charts from showdowns, in any spot | – | ✓ |
 | One player across renames and devices | – | ✓ |
 
-Everything runs locally: a small server on your machine, a SQLite database, and a
-Chrome extension. [Setup](#setup) is one command.
+Everything runs on your computer. The tracker is built into the Chrome extension,
+so there is nothing else to install. Add the optional companion app when you want
+the command line, a log folder kept in sync, or a database file you can open
+yourself. [Setup →](#setup)
 
 ---
 
@@ -172,33 +174,59 @@ and `--audit` checks a folder before you commit it.
 
 ## Setup
 
-You need **Python 3.11+**, **pipx** and **Chrome**. If you have Python but not
-pipx, run `python -m pip install --user pipx` and then `python -m pipx ensurepath`,
-and open a new terminal. On Windows, use the python.org installer rather than the
-Microsoft Store build, which sandboxes the files a background server needs.
+### The extension
+
+Install **Tracker for PokerNow** from the Chrome Web Store, or build it yourself (see
+[Development](#development)) and load `dist/extension` with **Load unpacked** in
+`chrome://extensions`.
+
+1. Pin the extension, open a PokerNow game, and click its icon. The side panel
+   opens and starts recording the table.
+2. Open the ⚙ settings, then **tracker ↗**, for stats, charts, review, pots and
+   players.
+3. Add games you played before installing it on that same page: drop PokerNow's
+   log exports on it, have it watch the folder they download to, or paste game
+   links to fetch. **Try it with sample data** fills an empty tracker with
+   someone else's (anonymized) hands to look around with.
+
+Your hands are kept in the extension's own storage, in this Chrome profile only.
+Removing the extension deletes them. Move them to the companion first (below) if
+you want to keep them.
+
+### The companion app (optional)
+
+The companion app runs the same tracker as a small server on your machine and adds:
+- the `pnt` command line;
+- a log folder kept in sync with the database;
+- a SQLite file you can open yourself;
+- native speed on a long history.
+
+You need **Python 3.11+** and **pipx**. If you have Python but not pipx, run
+`python -m pip install --user pipx`, then `python -m pipx ensurepath`, and open a new
+terminal. On Windows, use the python.org installer rather than the Microsoft Store
+build, which sandboxes the files a background server needs.
 
 ```bash
 pipx install git+https://github.com/Jaaaayden/pokernow-tracker
-pnt setup
+pnt setup --extension-id <the ID shown in the extension's ⚙ settings>
 ```
 
-`pnt setup` handles the whole first run and is safe to re-run. It creates the
-database, imports any exports it finds (or a bundled 5,257-hand sample if there are
-none; `--no-sample` skips it), installs the always-on background server on Windows,
-and prints the extension folder.
+`pnt setup` handles the first run and is safe to run again:
+- It creates the database and imports any exports it finds in
+  `~/Downloads/pokernow-logs`, or the bundled sample if there are none
+  (`--no-sample` skips it).
+- It registers the companion with Chrome, so Chrome starts the server whenever
+  Chrome is running, on Windows, macOS and Linux alike (`pnt connect`).
+- On Windows, it also installs an always-on background server (`pnt service`).
 
-1. In Chrome, go to `chrome://extensions`, turn on **Developer mode**, click **Load
-   unpacked**, and pick the folder `pnt setup` printed. `pnt extension --open`
-   reveals it again later.
-2. Pin the extension, open a PokerNow game, and click the icon to open the side
-   panel.
-3. Open **<http://127.0.0.1:52000>** for everything else: stats, charts, review,
-   pots and players.
+Then, in the extension's ⚙ settings, set **Tracker** to **Companion app** and press
+**Save**. Chrome asks to let the extension reach the server on your computer. Tick
+**Copy my hands to it** to bring along everything the built-in tracker already
+holds: every game, and every merge, note and review mark. The companion's pages
+are also at **<http://127.0.0.1:52000>**.
 
-On Windows the server starts at every login and restarts itself if it crashes.
-**After updating the code, run `pnt service restart`**, because a running server
-keeps the old code. On macOS and Linux, run `pnt serve` yourself, or put it under
-launchd or systemd.
+**After updating the companion, run `pnt service restart`** (or restart Chrome),
+because a running server keeps the old code.
 
 ### Commands
 
@@ -219,6 +247,8 @@ pnt pots                                     # biggest pots in the last 7 days
 pnt alias list                               # the player names you can query
 pnt alias merge onlybluffs genericpoker      # one person, two devices
 pnt redact --out pnt/logs                    # copies you can publish
+pnt redact --anonymize --out shared          # ...with every player replaced by a stand-in
+pnt connect <extension-id>                   # let Chrome start the server while it runs
 pnt where                                    # which database, log folder and extension
 ```
 
@@ -243,6 +273,7 @@ defaults to `~/Downloads/pokernow-logs`; set `PNT_LOG_DIR` to change it.
 | [`pnt/stats/SPEC.md`](pnt/stats/SPEC.md) | Every stat, tag and review flag, defined exactly |
 | [`tests/fixtures/README.md`](tests/fixtures/README.md) | What each fixture log exercises |
 | [`pnt/logs/README.md`](pnt/logs/README.md) | The bundled sample corpus |
+| [`docs/privacy.md`](docs/privacy.md) | What the extension stores, what it sends, and why each permission |
 
 ### Development
 
@@ -250,6 +281,11 @@ defaults to `~/Downloads/pokernow-logs`; set `PNT_LOG_DIR` to change it.
 git clone https://github.com/Jaaaayden/pokernow-tracker && cd pokernow-tracker
 pip install -e ".[dev]"
 pytest -q
+python scripts/build_extension.py      # dist/extension: load it unpacked; --zip packs it for the store
+node --test pnt/extension/*.test.mjs   # the extension, and the built-in tracker on real Pyodide
 ```
+
+`pnt/extension/` on its own is the companion-only extension. The build adds
+Pyodide and the Python the built-in tracker runs.
 
 See [architecture.md](docs/architecture.md#testing) for what the suite guarantees.

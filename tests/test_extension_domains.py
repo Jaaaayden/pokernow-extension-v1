@@ -1,4 +1,4 @@
-"""The extension and the server must both accept every PokerNow address.
+"""The extension must accept every PokerNow address, and the server none of them.
 
 A content script whose `matches` miss the page's domain never loads, and nothing
 reports it: no console error, the HUD just never appears and the settings say
@@ -31,11 +31,10 @@ def _content_script_matches() -> set[str]:
 
 def _preflight(origin: str):
     pytest.importorskip("fastapi")
-    from fastapi.testclient import TestClient
-
     from pnt.server.app import app
+    from tests.conftest import local_client
 
-    return TestClient(app).options(
+    return local_client(app).options(
         "/ingest", headers={"Origin": origin, "Access-Control-Request-Method": "POST"}
     )
 
@@ -46,8 +45,11 @@ def test_content_script_loads_on_every_pokernow_host(host):
 
 
 @pytest.mark.parametrize("host", HOSTS)
-def test_server_accepts_every_pokernow_host(host):
-    assert _preflight(host).headers.get("access-control-allow-origin") == host
+def test_server_gives_pokernow_pages_no_access(host):
+    """The page never calls the server: the background worker does, and its host
+    permission needs no CORS. Allowing these origins would only have let PokerNow's
+    own pages read every hand in the database, hole cards included."""
+    assert "access-control-allow-origin" not in _preflight(host).headers
 
 
 def test_server_still_refuses_other_origins():
@@ -106,7 +108,7 @@ def test_the_floating_hud_can_frame_the_panel_on_every_game_domain():
     # Every extension page framed inside it needs listing too: Chrome checks each
     # frame whose ancestors include the game page, and blocks the settings (⚙)
     # with "This page has been blocked by Chrome" otherwise.
-    framed = {"popup.html"}
+    framed = {"popup.html", "pages/chart.html"}
     assert all(framed <= set(e["resources"]) for e in entries)
     exposed = {m.split("/*")[0].rstrip("/") for e in entries for m in e["matches"]}
     assert exposed == set(HOSTS)
