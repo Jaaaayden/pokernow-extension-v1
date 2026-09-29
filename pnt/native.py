@@ -127,8 +127,19 @@ def run_host(db: Path, host: str, port: int, stdin: BinaryIO, stdout: BinaryIO) 
             )
         )
         if not closed.is_set():
-            print(f"pnt native: starting pid {os.getpid()}: http://{host}:{port}  db {db}", flush=True)
-            server.run()
+            # Our own socket, bound exclusively (see svc.bind): taken between the
+            # check above and here, the port is left to whoever has it.
+            try:
+                sock = svc.bind(host, port)
+            except OSError as exc:
+                print(f"pnt native: could not bind {host}:{port} ({exc}); reporting only", flush=True)
+                server = None
+            else:
+                print(f"pnt native: starting pid {os.getpid()}: http://{host}:{port}  db {db}", flush=True)
+                try:
+                    server.run(sockets=[sock])
+                finally:
+                    sock.close()
     closed.wait()
 
 

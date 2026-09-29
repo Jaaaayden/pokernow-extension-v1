@@ -20,6 +20,7 @@ from __future__ import annotations
 import csv
 import io
 import logging
+import os
 import re
 import sqlite3
 from collections.abc import Callable, Mapping
@@ -366,6 +367,9 @@ def health(ctx: Context) -> dict:
         "entries": row["e"],
         "parse_misses": row["m"],
         "log_folder": str(ctx.log_dir) if ctx.log_dir is not None else None,
+        # Which process answered: `pnt service restart` tells the new server from
+        # one that outlived it on the same port.
+        "pid": os.getpid(),
     }
 
 
