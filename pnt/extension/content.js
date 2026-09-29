@@ -43,6 +43,7 @@
     pollSeconds: 5,
     liveMin: 1,
     liveKnown: 5,
+    hudMode: "panel",   // "float" frames the HUD on this page (see float mode)
     sync: { cursor: 0, walk: null }, // see pager.js
     offered: 0, inserted: 0, polls: 0, errors: 0, pages: 0,
     lastError: null, lastPoll: null, shape: null, envelopeOk: null,
@@ -278,6 +279,131 @@
     return false;
   });
 
+  // ------------------------------------------------------------ float mode --
+  // The ⚙ HUD setting's other half: instead of the side panel, the side panel's
+  // own page framed in a box on the game page, so the two can never differ. The
+  // box is dragged by the frame's header (sidepanel.js posts the steps here),
+  // resized at its corner, and shown and hidden by the toolbar icon or its ✕.
+  // Where it was left, its size and whether it is hidden are kept per site.
+  const float = (() => {
+    const EDGE = 4, SIZE = { w: 420, h: 640 };
+    const EXT = chrome.runtime.getURL("");
+    let host = null, box = null, frame = null, want = null;
+    // Compact (the frame's –): the box is as tall as the table, and only its width
+    // can be dragged. The full-size box's size is kept apart, to go back to.
+    let compact = false;
+    const read = (k) => { try { return JSON.parse(localStorage.getItem(k) || "null"); } catch { return null; } };
+    const write = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} };
+
+    // Every move goes through place(), which keeps the box inside the window:
+    // dragged to an edge, or back on a smaller window, it would otherwise sit
+    // off-screen with nothing to grab it by.
+    function place(left, top) {
+      const w = Math.min(box.offsetWidth || SIZE.w, innerWidth), h = Math.min(box.offsetHeight || SIZE.h, innerHeight);
+      host.style.left = Math.min(Math.max(0, left), Math.max(0, innerWidth - w - EDGE)) + "px";
+      host.style.top = Math.min(Math.max(0, top), Math.max(0, innerHeight - h - EDGE)) + "px";
+    }
+    const at = () => ({ left: parseFloat(host.style.left) || 0, top: parseFloat(host.style.top) || 0 });
+
+    function setShown(on) {
+      if (!host) return;
+      host.style.display = on ? "" : "none";
+      write("pnt-float-hidden", !on);
+      if (on) place(at().left, at().top);
+    }
+
+    async function mount() {
+      if (host) return;
+      const t = await send({ type: "tab" });
+      if (host || state.hudMode !== "float") return; // unmounted or remounted meanwhile
+      host = document.createElement("div");
+      const root = host.attachShadow({ mode: "closed" });
+      root.innerHTML = `
+        <style>
+          :host { all: initial; position: fixed; z-index: 2147483000; }
+          .box { display: flex; flex-direction: column; resize: both; overflow: hidden;
+            min-width: 260px; min-height: 160px; max-width: calc(100vw - ${EDGE * 2}px); max-height: calc(100vh - ${EDGE * 2}px);
+            background: #141413; border: 1px solid rgba(255,255,255,.14); border-radius: 10px;
+            box-shadow: 0 10px 30px rgba(0,0,0,.45); }
+          .box.compact { resize: horizontal; }
+          iframe { display: block; flex: 1; width: 100%; min-height: 0; border: 0; background: #141413; }
+        </style>
+        <div class="box"><iframe title="PokerNow Tracker"></iframe></div>`;
+      box = root.querySelector(".box");
+      frame = root.querySelector("iframe");
+      const size = read("pnt-float-size");
+      box.style.width = (size?.w ?? SIZE.w) + "px";
+      box.style.height = (size?.h ?? SIZE.h) + "px";
+      frame.src = `${EXT}sidepanel.html?embed=1&tab=${t.ok && t.data.id != null ? t.data.id : ""}`;
+      document.documentElement.appendChild(host);
+      const pos = read("pnt-float-pos");
+      if (pos) place(pos.left, pos.top);
+      else place(innerWidth - box.offsetWidth - 12, 12);
+      // `resize` fires no event of its own; the observer sees the corner drag land.
+      new ResizeObserver(() => {
+        if (!box || !box.offsetWidth || compact) return;
+        write("pnt-float-size", { w: box.offsetWidth, h: box.offsetHeight });
+      }).observe(box);
+      setShown(!read("pnt-float-hidden"));
+    }
+
+    function unmount() {
+      host?.remove();
+      host = box = frame = want = null;
+      compact = false;
+    }
+
+    function setCompact(on, h, w) {
+      compact = on;
+      box.classList.toggle("compact", on);
+      if (on) {
+        box.style.height = Math.ceil(h) + 2 + "px"; // the border
+        if (w) box.style.width = Math.ceil(w) + 2 + "px";
+      } else {
+        const size = read("pnt-float-size");
+        box.style.width = (size?.w ?? SIZE.w) + "px";
+        box.style.height = (size?.h ?? SIZE.h) + "px";
+      }
+      place(at().left, at().top);
+    }
+
+    // Steps from the header in the frame. `want` is where the box would be with
+    // no window edge in the way, so dragging back from past an edge picks the box
+    // up again where the pointer is rather than where it stopped.
+    addEventListener("message", (e) => {
+      if (!frame || e.source !== frame.contentWindow || `${e.origin}/` !== EXT) return;
+      const m = e.data || {};
+      if (m.type === "pnt-drag") {
+        want ??= at();
+        want = { left: want.left + (Number(m.dx) || 0), top: want.top + (Number(m.dy) || 0) };
+        place(want.left, want.top);
+      } else if (m.type === "pnt-drop") {
+        want = null;
+        write("pnt-float-pos", at());
+      } else if (m.type === "pnt-fit") {
+        const h = Number(m.h), w = Number(m.w);
+        if (h > 0) setCompact(true, h, w > 0 ? w : 0);
+      } else if (m.type === "pnt-full") {
+        setCompact(false);
+      } else if (m.type === "pnt-hide") {
+        setShown(false);
+      }
+    });
+    // A window that shrinks must not strand the box outside it either.
+    addEventListener("resize", () => { if (host) place(at().left, at().top); });
+
+    return {
+      apply: () => (state.hudMode === "float" ? mount() : unmount()),
+      toggle: () => setShown(host?.style.display === "none"),
+    };
+  })();
+
+  // The toolbar icon, in float mode (in panel mode it opens the panel instead).
+  chrome.runtime.onMessage.addListener((msg) => {
+    if (msg?.type === "toggle-hud") float.toggle();
+    return false;
+  });
+
   // ------------------------------------------------------------------ start --
   (async () => {
     const s = await send({ type: "settings" });
@@ -286,7 +412,9 @@
       state.pollSeconds = Number(s.data.pollSeconds) || 5;
       state.liveMin = Math.max(1, Number(s.data.liveMin) || 1);
       state.liveKnown = knownSetting(s.data.liveKnown);
+      state.hudMode = s.data.hudMode === "float" ? "float" : "panel";
     }
+    float.apply();
     const h = await send({ type: "health" });
     setStatus(h.ok ? `connected · ${h.data.hands} hands in db` : `tracker not reachable at ${state.server}`);
     chrome.storage.onChanged.addListener((changes, area) => {
@@ -300,6 +428,10 @@
       if (changes.liveKnown) {
         state.liveKnown = knownSetting(changes.liveKnown.newValue);
         state.liveInserted = -1;
+      }
+      if (changes.hudMode) {
+        state.hudMode = changes.hudMode.newValue === "float" ? "float" : "panel";
+        float.apply();
       }
     });
     loop();

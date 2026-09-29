@@ -5,6 +5,8 @@
 <title>PokerNow Tracker</title>
 <style>
   html, body { margin: 0; background: #141413; color: #fff; }
+  /* Thin scrollbars in the panel's own greys, with no track and no arrow buttons. */
+  html { color-scheme: dark; scrollbar-width: thin; scrollbar-color: #383835 transparent; }
   body { font: 11px/1.3 system-ui, -apple-system, "Segoe UI", sans-serif; }
   [hidden] { display: none !important; }
   button { all: unset; cursor: pointer; padding: 1px 5px; border-radius: 5px; color: #c3c2b7; }
@@ -17,6 +19,9 @@
   .head .st { color: #c3c2b7; margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; max-width: 60%; }
   .head .live { flex-basis: 100%; order: 9; color: #c3c2b7; font-variant-numeric: tabular-nums; }
   .head .live:empty { display: none; }
+  /* On the game page (float mode) the header is what the box is dragged by. */
+  body.embed .head { cursor: move; user-select: none; }
+  body.embed .head button { cursor: pointer; }
 
   .settings { border-bottom: 1px solid rgba(255,255,255,.1); }
   .settings iframe { display: block; width: 100%; height: 360px; border: 0; background: #1a1a19; }
@@ -64,6 +69,21 @@
   .spot:empty { display: none; }
   .spot.pending { color: #fff; }
 
+  /* Compact: the whole table in one grid, a row per player, the way the HUD
+     first looked on the page. No tags, no spot line, no chart. */
+  .grid { overflow-x: auto; padding: 2px 0 4px; }
+  .grid table { border-collapse: collapse; width: 100%; font-variant-numeric: tabular-nums; }
+  .grid th, .grid td { padding: 2px 5px; text-align: right; white-space: nowrap; }
+  .grid th { color: #898781; font-weight: 500; font-size: 10px; }
+  .grid th.group { color: #c3c2b7; text-align: center; font-weight: 400; padding-bottom: 0; }
+  .grid th:first-child, .grid td:first-child { text-align: left; }
+  .grid td.name { font-weight: 600; max-width: 110px; overflow: hidden; text-overflow: ellipsis; }
+  .grid td.name small { color: #898781; font-weight: 400; margin-left: 3px; font-size: 9px; }
+  .grid td small.life { color: #898781; margin-left: 3px; font-size: 9px; }
+  .grid td .drift { color: #86b6ef; }
+  .grid tr.act td.name { color: #ffd166; }
+  .grid tr.out td { opacity: .45; }
+
   /* The chart takes the panel's width; its height is dragged at the corner and remembered. */
   .chart { display: flex; flex-direction: column; border-top: 1px solid rgba(255,255,255,.1);
     resize: vertical; overflow: hidden; height: 640px; min-height: 240px; }
@@ -78,11 +98,13 @@
     <b>PNT</b>
     <span class="st" id="st"></span>
     <button id="pause" title="pause capture" hidden>⏸</button>
+    <button id="compact" title="compact: one line of stats per player, no tags or chart">–</button>
     <button id="gear" title="settings" aria-pressed="false">⚙</button>
+    <button id="hide" title="hide the HUD — the toolbar icon brings it back" hidden>✕</button>
     <span class="live" id="live"></span>
   </div>
   <div class="settings" id="settings" hidden><iframe id="settings-frame" title="settings"></iframe></div>
-  <div class="empty" id="nogame">Open a PokerNow game tab — the tracker shows it here.</div>
+  <div class="empty" id="nogame">Nothing from this tab yet. If this is a PokerNow game, reload the page — a game opened before the extension was (re)loaded is not being tracked.</div>
   <main id="main" hidden>
     <div class="legend" id="legend" hidden
       title="Each figure: this game first, then every game on record in grey. A blue session figure is 10+ points from lifetime on at least 10 chances.">

@@ -31,6 +31,9 @@
     --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,0.10); --mid: #383835; --accent: #3987e5;
   }
   * { box-sizing: border-box; }
+  /* Thin scrollbars in the theme's own greys, with no track and no arrow buttons.
+     Inherited, so the inner scrollers (hand rows, the grid, the side list) match. */
+  :root { scrollbar-width: thin; scrollbar-color: var(--axis) transparent; }
   body {
     margin: 0; background: var(--page); color: var(--ink);
     font: 14px/1.4 system-ui, -apple-system, "Segoe UI", sans-serif;

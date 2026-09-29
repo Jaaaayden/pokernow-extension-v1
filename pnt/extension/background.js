@@ -7,7 +7,9 @@
 
 // `liveMin`: hands a spot needs before the live view shows it, else it widens.
 // `liveKnown`: shown hands a spot narrowed to the board's texture must keep.
-const DEFAULTS = { server: "http://127.0.0.1:52000", pollSeconds: 5, liveMin: 1, liveKnown: 5 };
+// `hudMode`: "panel" draws the HUD in Chrome's side panel, beside the page;
+// "float" draws the same page in a box on the game page that can be dragged about.
+const DEFAULTS = { server: "http://127.0.0.1:52000", pollSeconds: 5, liveMin: 1, liveKnown: 5, hudMode: "panel" };
 
 // A saved number, or the default when nothing sensible was saved. Zero is a
 // choice here (no texture gate), so `|| fallback` would be wrong.
@@ -67,18 +69,63 @@ const handlers = {
     await chrome.storage.session.set({ [key]: { ...msg.status, tabId: sender.tab?.id, at: Date.now() } });
     return {};
   },
+
+  // Which tab the content script is in; it cannot ask the tabs API itself. The
+  // floating HUD's frame is told, so it shows that tab and never the active one.
+  tab: async (msg, sender) => ({ id: sender.tab?.id ?? null }),
 };
 
-// The toolbar icon opens the side panel. The HUD lives there, beside the page,
-// because drawn on the page it covered half the table.
-chrome.sidePanel?.setPanelBehavior({ openPanelOnActionClick: true }).catch(() => {});
+// ------------------------------------------------------------- HUD mode --
+// The side panel is off by default and switched on per game tab, in panel mode
+// only. A tab's own panel is shown on that tab alone: switch away and it goes,
+// switch back and it returns.
+//
+// A game tab is known by its URL, not by its content script reporting in: after
+// the extension is reloaded, a game tab already open has no working content
+// script until it is reloaded too, and the icon must still open the panel there
+// (which then says to reload). The URL is visible for these sites only, through
+// host_permissions.
+const sidePanel = chrome.sidePanel;
+const GAME_URLS = [
+  "https://www.pokernow.com/games/*", "https://pokernow.com/games/*",
+  "https://www.pokernow.club/games/*", "https://pokernow.club/games/*",
+];
+const isGame = (url) => /^https:\/\/(www\.)?pokernow\.(com|club)\/games\/[A-Za-z0-9_-]+/.test(url || "");
+async function hudMode() {
+  const { hudMode } = await chrome.storage.sync.get({ hudMode: DEFAULTS.hudMode });
+  return hudMode === "float" ? "float" : "panel";
+}
+async function applyTab(tabId, game, mode) {
+  if (!sidePanel) return;
+  const enabled = game && (mode ?? (await hudMode())) === "panel";
+  await sidePanel.setOptions(enabled ? { tabId, path: "sidepanel.html", enabled } : { tabId, enabled }).catch(() => {});
+}
+// In panel mode the toolbar icon opens the panel; in float mode it shows and
+// hides the box on the page (action.onClicked only fires when the panel does not
+// take the click).
+async function applyMode() {
+  const mode = await hudMode();
+  await sidePanel?.setPanelBehavior({ openPanelOnActionClick: mode === "panel" }).catch(() => {});
+  const tabs = await chrome.tabs.query({ url: GAME_URLS }).catch(() => []);
+  for (const t of tabs) await applyTab(t.id, true, mode);
+}
+sidePanel?.setOptions({ enabled: false }).catch(() => {});
+applyMode();
+chrome.storage.onChanged.addListener((changes, area) => {
+  if (area === "sync" && changes.hudMode) applyMode();
+});
+chrome.action.onClicked.addListener((tab) => {
+  if (tab?.id != null) chrome.tabs.sendMessage(tab.id, { type: "toggle-hud" }).catch(() => {});
+});
 
 // A closed tab's report would otherwise sit in session storage until the browser closes.
 chrome.tabs.onRemoved.addListener((tabId) => chrome.storage.session.remove(`status:${tabId}`));
 // Nor may it outlive a reload or a move off the game: the side panel would go on
 // showing a table that is no longer there. A game page reports again as it loads.
-chrome.tabs.onUpdated.addListener((tabId, info) => {
+// Its panel follows its URL: a reload keeps it, and a move off the game drops it.
+chrome.tabs.onUpdated.addListener((tabId, info, tab) => {
   if (info.status === "loading") chrome.storage.session.remove(`status:${tabId}`);
+  if (info.status === "loading" || info.url) applyTab(tabId, isGame(tab.url));
 });
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {

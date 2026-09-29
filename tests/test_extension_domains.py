@@ -91,3 +91,33 @@ def test_the_hud_opens_in_the_side_panel():
     # The panel uses spot.js's helpers, so it must be loaded first.
     html = (EXTENSION_DIR / path).read_text(encoding="utf-8")
     assert 0 <= html.index('src="spot.js"') < html.index('src="sidepanel.js"')
+
+
+def test_the_floating_hud_can_frame_the_panel_on_every_game_domain():
+    """Float mode frames sidepanel.html on the game page itself.
+
+    A page may only frame an extension page listed as web-accessible to it, so
+    every domain the content script runs on must be listed -- else the box on
+    that domain is blank -- and no other site is given it.
+    """
+    manifest = json.loads((EXTENSION_DIR / "manifest.json").read_text(encoding="utf-8"))
+    entries = [e for e in manifest.get("web_accessible_resources", []) if "sidepanel.html" in e["resources"]]
+    assert entries, "sidepanel.html is not web-accessible"
+    exposed = {m.split("/*")[0].rstrip("/") for e in entries for m in e["matches"]}
+    assert exposed == set(HOSTS)
+    assert {m.split("/games/")[0] for m in _content_script_matches()} == set(HOSTS)
+    # The HUD mode is a saved setting like the others, with the side panel as default.
+    background = (EXTENSION_DIR / "background.js").read_text(encoding="utf-8")
+    assert 'hudMode: "panel"' in background
+
+
+def test_the_side_panel_knows_a_game_tab_by_its_url():
+    """The panel is switched on per game tab, found by URL.
+
+    It used to wait for the content script's first report, so after the extension
+    was reloaded a game tab left open never reported and the toolbar icon did
+    nothing at all. Reading a tab's URL needs host permission for it, so every
+    game address the content script runs on must be in host_permissions.
+    """
+    manifest = json.loads((EXTENSION_DIR / "manifest.json").read_text(encoding="utf-8"))
+    assert _content_script_matches() <= set(manifest["host_permissions"])

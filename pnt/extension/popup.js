@@ -7,10 +7,24 @@
   $("poll").value = s.pollSeconds;
   $("livemin").value = s.liveMin ?? 1;
   $("liveknown").value = s.liveKnown ?? 5;
+  $("hudmode").value = s.hudMode === "float" ? "float" : "panel";
+  // Known ahead of the click: the side panel opens only in the click's own turn,
+  // before anything has been awaited.
+  const [here] = await chrome.tabs.query({ active: true, currentWindow: true });
   $("tracker").href = s.server + "/";
 
   $("save").addEventListener("click", async () => {
+    const hudMode = $("hudmode").value;
+    // Back to the side panel from the floating box: open it for this tab rather
+    // than leave the HUD nowhere until the toolbar icon is clicked. The panel is
+    // switched on for the tab first, since it is off everywhere in float mode.
+    if (hudMode === "panel" && s.hudMode === "float" && here?.id != null && chrome.sidePanel?.open) {
+      chrome.sidePanel.setOptions({ tabId: here.id, path: "sidepanel.html", enabled: true }).catch(() => {});
+      chrome.sidePanel.open({ tabId: here.id }).catch(() => {});
+    }
+    s.hudMode = hudMode;
     await chrome.storage.sync.set({
+      hudMode,
       server: $("server").value.trim().replace(/\/+$/, "") || "http://127.0.0.1:52000",
       pollSeconds: Math.max(2, Number($("poll").value) || 5),
       liveMin: Math.max(1, Number($("livemin").value) || 1),

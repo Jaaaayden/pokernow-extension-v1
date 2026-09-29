@@ -4,7 +4,14 @@
   "version": "0.1.0",
   "description": "Streams the live PokerNow hand log into the local tracker and shows per-player stats and range charts in a side panel.",
   "permissions": ["storage", "sidePanel"],
-  "host_permissions": ["http://127.0.0.1/*", "http://localhost/*"],
+  "host_permissions": [
+    "http://127.0.0.1/*",
+    "http://localhost/*",
+    "https://www.pokernow.com/games/*",
+    "https://pokernow.com/games/*",
+    "https://www.pokernow.club/games/*",
+    "https://pokernow.club/games/*"
+  ],
   "background": { "service_worker": "background.js" },
   "content_scripts": [
     {
@@ -16,6 +23,17 @@
       ],
       "js": ["normalize.js", "pager.js", "spot.js", "watch.js", "content.js"],
       "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["sidepanel.html"],
+      "matches": [
+        "https://www.pokernow.com/*",
+        "https://pokernow.com/*",
+        "https://www.pokernow.club/*",
+        "https://pokernow.club/*"
+      ]
     }
   ],
   "side_panel": { "default_path": "sidepanel.html" },

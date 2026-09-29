@@ -296,9 +296,20 @@ HUD embeds it. `GET /players/{alias}/range` returns the same data as JSON, with 
 ## The live HUD
 
 Open a PokerNow game and click the extension's toolbar icon (pin it first) to open
-Chrome's side panel. It sits beside the game, so nothing covers the table, and it
-shows whichever tab is active in that window. Its ⏸ pauses capture, and its ⚙
-holds the server URL, poll interval and capture status.
+Chrome's side panel. It sits beside the game, so nothing covers the table. It only
+opens on PokerNow game tabs, and it hides when you switch to another tab and comes
+back when you return. Its ⏸ pauses capture, and its ⚙ holds the server URL, poll
+interval and capture status.
+
+**Floating instead.** Set ⚙ → HUD to *Floating on the page* to get the same HUD as a
+box on the game page. Drag it by its header and resize it from its bottom-right
+corner. It remembers where you left it. Its ✕ hides it, and the toolbar icon brings
+it back. Switch back to *Side panel* in the same place.
+
+**Compact.** The – in the header strips the HUD down to one table: a row per player
+with the same figures (this session, then lifetime in grey) and no tags, spot lines
+or chart. When floating, the box shrinks to fit the table. The + brings everything
+back. Either mode stays as you left it.
 
 **Player cards.** Everyone dealt into the latest hand gets a card with VPIP, PFR,
 3-bet, fold to 3-bet, c-bet and WTSD, each shown twice: this session first, with

@@ -32,6 +32,7 @@
     hud: null, live: null,
     acting: null,       // the name on the table's decision-current seat, ahead of /live
     follow: true,       // the chart follows the live spot
+    compact: false,     // the stats table only: no tags, spot lines or chart
     sentSpots: [],      // the last few spots posted into the chart, to tell an echo from an edit
   };
   let selected = null, pinned = null;
@@ -42,15 +43,53 @@
 
   // ------------------------------------------------------------- the tab --
   // The panel belongs to a window, not a tab: it shows whichever tab is active.
+  // Framed on the game page instead (float mode, content.js), it belongs to that
+  // page's tab, which content.js names in `?tab=`.
+  const params = new URLSearchParams(location.search);
+  const EMBED = params.get("embed") === "1";
+  const EMBED_TAB = EMBED ? Number(params.get("tab")) : NaN;
   const keyOf = (id) => `status:${id}`;
   async function track() {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    const id = tab?.id ?? null;
+    let id;
+    if (EMBED) id = Number.isInteger(EMBED_TAB) ? EMBED_TAB : null;
+    else id = (await chrome.tabs.query({ active: true, currentWindow: true }))[0]?.id ?? null;
     if (id !== state.tabId) { state.tabId = id; state.rev = -1; }
     const got = id == null ? {} : await chrome.storage.session.get(keyOf(id));
     show(got[keyOf(id)] || null);
   }
-  chrome.tabs.onActivated.addListener(track);
+  if (!EMBED) chrome.tabs.onActivated.addListener(track);
+
+  // ------------------------------------------------------------ float mode --
+  // The header drags the box it is framed in. The frame moves under the pointer
+  // as it goes, so the steps are measured on the screen, not in the frame, and
+  // pointer capture keeps them coming once the pointer is outside it.
+  if (EMBED) {
+    document.body.classList.add("embed");
+    $("hide").hidden = false;
+    $("hide").addEventListener("click", () => parent.postMessage({ type: "pnt-hide" }, "*"));
+    const head = document.querySelector(".head");
+    let last = null;
+    head.addEventListener("pointerdown", (e) => {
+      if (e.button !== 0 || e.target.closest("button")) return;
+      last = { x: e.screenX, y: e.screenY };
+      head.setPointerCapture(e.pointerId);
+      e.preventDefault();
+    });
+    head.addEventListener("pointermove", (e) => {
+      if (!last) return;
+      const dx = e.screenX - last.x, dy = e.screenY - last.y;
+      if (!dx && !dy) return;
+      last = { x: e.screenX, y: e.screenY };
+      parent.postMessage({ type: "pnt-drag", dx, dy }, "*");
+    });
+    const drop = () => {
+      if (!last) return;
+      last = null;
+      parent.postMessage({ type: "pnt-drop" }, "*");
+    };
+    head.addEventListener("pointerup", drop);
+    head.addEventListener("pointercancel", drop);
+  }
 
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area === "session" && state.tabId != null && keyOf(state.tabId) in changes) {
@@ -112,6 +151,7 @@
     if (open && !$("settings-frame").src) $("settings-frame").src = "popup.html";
     $("settings").hidden = !open;
     $("gear").setAttribute("aria-pressed", String(open));
+    fit();
   });
 
   // ----------------------------------------------------------------- chart --
@@ -319,18 +359,121 @@
       : "";
     // An older server sends lifetime only; the cards then print just that.
     const hasSession = seats.some((s) => s.session);
-    $("legend").hidden = !hasSession;
+    // The compact table carries the legend in its own header.
+    $("legend").hidden = !hasSession || state.compact;
     if (!seats.length) {
       body.append(el("div", "empty", state.hud || state.live ? "no one dealt in yet" : "waiting for the first hand…"));
-      return;
+    } else if (state.compact) {
+      body.append(grid(seats, lv, hasSession));
+    } else {
+      for (const s of seats) body.appendChild(card(s, lv));
+      markSel();
+      refreshChart();
     }
-    for (const s of seats) body.appendChild(card(s, lv));
-    markSel();
-    refreshChart();
+    fit();
+  }
+
+  // ---------------------------------------------------------------- compact --
+  // The – in the header strips the panel down to the stats table; + brings the
+  // cards, tags and chart back. Remembered, like the chart's height.
+  function setCompact(on) {
+    state.compact = on;
+    try { localStorage.setItem("pnt-compact", on ? "1" : "0"); } catch {}
+    $("compact").textContent = on ? "+" : "–";
+    $("compact").title = on ? "expand: cards, tags and the range chart" : "compact: one line of stats per player, no tags or chart";
+    if (on) closeChart();
+    render();
+    widthPending = on;
+    if (EMBED && !on) parent.postMessage({ type: "pnt-full" }, "*");
+    fit();
+  }
+  $("compact").addEventListener("click", () => setCompact(!state.compact));
+
+  // On the game page, a compact HUD is only as tall as the table: the box is
+  // told the height after every redraw. Its width is the table's on the way into
+  // compact -- once there is a table to measure -- and after that only grows, so
+  // a width dragged by hand stays.
+  let widthPending = false;
+  function fit() {
+    if (!EMBED || !state.compact) return;
+    const g = document.querySelector(".grid");
+    const msg = { type: "pnt-fit", h: document.body.offsetHeight };
+    if (g && (widthPending || g.scrollWidth > innerWidth)) {
+      msg.w = g.scrollWidth;
+      widthPending = false;
+    }
+    parent.postMessage(msg, "*");
+  }
+
+  // One figure into `into`: this session, then lifetime in grey, the session one
+  // blue when it drifts. Returns the hover text. The cards and the compact table
+  // both use it, so the two can never read a figure differently.
+  function figure(s, k, tip, into) {
+    const st = s.stats || {}, ss = s.session;
+    if (!ss) {
+      into.appendChild(el("span", null, fmt(st[k])));
+      return tip;
+    }
+    const now = el("span", null, fmt(ss[k]));
+    const nOpp = sample(ss, k), lOpp = sample(st, k);
+    if (typeof ss[k] === "number" && typeof st[k] === "number" && k !== "hands"
+        && (nOpp ?? 0) >= DRIFT_MIN_OPP && Math.abs(ss[k] - st[k]) >= DRIFT_POINTS) {
+      now.className = "drift";
+    }
+    into.append(now, el("small", "life", fmt(st[k])));
+    const of = (v, n) => (n == null ? fmt(v) : `${fmt(v)}% of ${n}`);
+    return `${tip}\n\n` + (k === "hands"
+      ? `this session: ${fmt(ss[k])} hands · lifetime: ${fmt(st[k])}`
+      : `this session: ${of(ss[k], nOpp)} · lifetime: ${of(st[k], lOpp)}`);
+  }
+
+  // Compact: every player in one table, a row each, and nothing else -- the
+  // player to act in yellow, the folded dimmed, the rest is the numbers.
+  function grid(seats, lv, hasSession) {
+    const table = el("table");
+    const head = el("thead");
+    if (hasSession) {
+      const tr = el("tr");
+      tr.append(el("th"));
+      const g = el("th", "group", "this session · lifetime");
+      g.colSpan = COLS.length;
+      g.title = $("legend").title;
+      tr.append(g);
+      head.append(tr);
+    }
+    const tr = el("tr");
+    tr.append(el("th", null, "player"));
+    for (const [, label, tip] of COLS) {
+      const th = el("th", null, label);
+      th.title = tip;
+      tr.append(th);
+    }
+    head.append(tr);
+    const body = el("tbody");
+    for (const s of seats) {
+      const row = el("tr");
+      if (s.live) {
+        if (lv && PNT.actingId(lv, state.acting) === s.pn_id) row.classList.add("act");
+        if (s.live.folded) row.classList.add("out");
+      }
+      const name = el("td", "name", s.alias || s.name || s.pn_id);
+      name.appendChild(el("small", null, `#${s.seat}`));
+      name.title = `${s.alias || s.name || s.pn_id} · seat ${s.seat} · ${s.pn_id}`;
+      row.append(name);
+      for (const [k, , tip] of COLS) {
+        const td = el("td");
+        td.title = figure(s, k, tip, td);
+        row.append(td);
+      }
+      body.append(row);
+    }
+    table.append(head, body);
+    const wrap = el("div", "grid");
+    wrap.append(table);
+    return wrap;
   }
 
   function card(s, lv) {
-    const st = s.stats || {};
     const c = el("div", "card");
     c.dataset.alias = s.alias || "";
     c.title = `seat ${s.seat} · ${s.pn_id}`;
@@ -375,26 +518,10 @@
 
     // The numbers: this session, then lifetime in grey.
     const stats = el("div", "stats");
-    const ss = s.session;
     for (const [k, label, tip] of COLS) {
       const cell = el("span", "stat");
       cell.appendChild(el("span", "k", label));
-      if (!ss) {
-        cell.appendChild(el("span", null, fmt(st[k])));
-        cell.title = tip;
-      } else {
-        const now = el("span", null, fmt(ss[k]));
-        const nOpp = sample(ss, k), lOpp = sample(st, k);
-        if (typeof ss[k] === "number" && typeof st[k] === "number" && k !== "hands"
-            && (nOpp ?? 0) >= DRIFT_MIN_OPP && Math.abs(ss[k] - st[k]) >= DRIFT_POINTS) {
-          now.className = "drift";
-        }
-        cell.append(now, el("small", "life", fmt(st[k])));
-        const of = (v, n) => (n == null ? fmt(v) : `${fmt(v)}% of ${n}`);
-        cell.title = `${tip}\n\n` + (k === "hands"
-          ? `this session: ${fmt(ss[k])} hands · lifetime: ${fmt(st[k])}`
-          : `this session: ${of(ss[k], nOpp)} · lifetime: ${of(st[k], lOpp)}`);
-      }
+      cell.title = figure(s, k, tip, cell);
       stats.appendChild(cell);
     }
     c.appendChild(stats);
@@ -431,6 +558,9 @@
   // ----------------------------------------------------------------- start --
   (async () => {
     try { state.follow = localStorage.getItem("pnt-follow") !== "0"; } catch {}
+    let compact = false;
+    try { compact = localStorage.getItem("pnt-compact") === "1"; } catch {}
+    setCompact(compact);
     updateWho();
     const s = await send({ type: "settings" });
     if (s.ok) state.server = s.data.server;

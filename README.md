@@ -28,7 +28,8 @@ Chrome extension. [Setup](#setup) is one command.
 
 ### Live HUD that follows the hand
 
-The HUD sits in Chrome's side panel, beside the table and never on top of it. As the
+The HUD sits in Chrome's side panel, beside the table and never on top of it. You can also
+set it to float as a box on the page you can drag around (⚙ → HUD). As the
 hand is played, it tracks each player's spot as it builds (`BTN open → faced 3-bet →
 called → faced small flop c-bet`) and shows what they have shown up with there:
 
