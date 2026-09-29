@@ -549,31 +549,50 @@ type, and -- for a failed bluff -- the size of the bet and who answered it, with
 their archetype, their WTSD and whether they had bet or raised earlier in the
 hand. That last one is a heuristic for an uncapped range, and is labelled as one.
 
-### Marking a hand reviewed
+### Marking a hand reviewed, and writing down what went wrong
 
-A flag says a hand is worth a look. A **mark** says you have taken it -- it is
-entered by hand, and it is the one thing on these pages that is *stored* rather
-than derived on every request. `pnt reviewed <game_id> <hand_number>` sets it,
-`--undo` clears it, `POST /hands/{hand_id}/reviewed` is the same write for the
-page, and every review row carries `reviewed` and `reviewed_at`.
+A flag says a hand is worth a look. A **mark** says you have taken it, and a
+**note** says what you found -- the mistake, the read, the question to settle
+later. Both are entered by hand, and they are the only things on these pages that
+are *stored* rather than derived on every request.
 
-**The mark is on the hand, not on the flag or the player.** You watched a replay
-or you did not: a hand carrying two flags, or showing up on two players' reviews,
-is marked once and shows as marked everywhere.
+| | Sets it | Clears it | On the page | In a row |
+|---|---|---|---|---|
+| Mark | `pnt reviewed <game_id> <hand_number>` | `--undo` | the ✓ beside the row | `reviewed`, `reviewed_at` |
+| Note | `pnt note <game_id> <hand_number> "<text>"` | `--clear` | the ✎ beside the row | `note`, `noted_at` |
 
-**It is keyed on `(game_id, hand_number)` -- the log's own name for the hand --
+`POST /hands/{hand_id}/reviewed` and `POST /hands/{hand_id}/note` are the same two
+writes for the page; `pnt note` with no arguments lists every note, and
+`pnt review --noted` lists only the hands that have one.
+
+**Both are on the hand, not on the flag or the player.** You watched a replay or
+you did not: a hand carrying two flags, or showing up on two players' reviews, is
+marked once, noted once, and reads that way everywhere.
+
+**Both are keyed on `(game_id, hand_number)` -- the log's own name for the hand --
 never on `hand_id`.** `hand_id` is a rowid the importer hands out, and a rebuild
-deletes a game's hands before re-inserting them, so every id in that game moves;
-a mark keyed on one would come back pointing at a different hand. For the same
-reason `hand_reviews` has no foreign key to `hands`: a cascade would erase the
-marks on the rebuild that was supposed to preserve them.
+deletes a game's hands before re-inserting them, so every id in that game moves; a
+mark keyed on one would come back pointing at a different hand. For the same
+reason neither table has a foreign key to `hands`: a cascade would erase them on
+the rebuild that was supposed to preserve them.
 
-Alone among the layer-2 tables, marks are never thrown away -- a rebuild, a merge
-or a rename leaves them untouched -- because no log can re-derive a judgement you
-made. They are the same kind of row as an identity merge or a player note.
+Alone among the layer-2 tables, marks and notes are never thrown away -- a
+rebuild, a merge or a rename leaves them untouched -- because no log can
+re-derive a judgement you made. They are the same kind of row as an identity merge
+or a player note.
+
+**The mark and the note are independent**, which is why they are two tables and
+not one column beside the other. Clearing the mark on a hand you want to come back
+to must not delete what you typed about it, and a note on a hand still to be
+reviewed -- "check the turn sizing here" -- is the ordinary case, written before
+the second look rather than after. Writing a note again replaces it: a note is a
+document, not a log, and one that strips to nothing is a deletion. `noted_at` is
+therefore when it was *last* written, where `reviewed_at` is when the hand was
+*first* marked.
 
 `pnt review --unreviewed` lists only what is left, and the chart's **Hide
-reviewed** button does the same for the Hand review and Bad beats views.
+reviewed** button does the same for the Hand review and Bad beats views. Notes are
+never hidden: they are the one thing on the row you wrote yourself.
 
 ### Reproducing a flag on the chart
 
@@ -591,27 +610,27 @@ the hands its widest filter lists, and a test holds it to that:
 
 ### Judgement calls
 
-16. **Both sides of a missed-value hand are flagged.** The row says the money
+19. **Both sides of a missed-value hand are flagged.** The row says the money
     did not go in, not whose fault that was.
-17. **One beat per hand**, tested `suckout`, then `cooler_pre`, then
+20. **One beat per hand**, tested `suckout`, then `cooler_pre`, then
     `cooler_post`. A hand listed twice would read as two beats.
-18. **A chop is never a beat.** Every beat needs chips actually lost.
-19. **`suckout_equity` is 0.6, not 0.5.** Being 53% and losing is variance in the
+21. **A chop is never a beat.** Every beat needs chips actually lost.
+22. **`suckout_equity` is 0.6, not 0.5.** Being 53% and losing is variance in the
     ordinary sense, and calling it a bad beat makes the list useless.
-20. **Missed value and coolers are judged on the earliest dry street, not the
+23. **Missed value and coolers are judged on the earliest dry street, not the
     river.** Almost every river board has a straight or a flush available, so the
     river would answer "no hand was ever safe" and flag nothing at all.
-21. **One hole card to a paired board is not a stacks hand.** Trips with a
+24. **One hole card to a paired board is not a stacks hand.** Trips with a
     kicker, or a full house the board mostly made, is a hand everyone can hold a
     piece of -- and the pool's own hands say so: the first draft of this section
     flagged trips against trips as missed value.
-22. **A failed bluff is judged at its last called street, and preflop bluffs are
+25. **A failed bluff is judged at its last called street, and preflop bluffs are
     out of scope.** A three-barrel bluff is one row, on the river; a light 3-bet
-    that got called is a preflop range question.
-23. **An unknown starting stack is unknown, not zero.** Effective stacks and SPR
+    that got called is a preflop range question, which the tags already answer.
+26. **An unknown starting stack is unknown, not zero.** Effective stacks and SPR
     are `None`, the hand is skipped for the flags that need them, and `skipped`
     counts it. Re-importing the log repairs it.
-24. **A bluff a villain raised reads as `raised`**, from this player's last
+27. **A bluff a villain raised reads as `raised`**, from this player's last
     aggressive action on that street alone. A bet, a raise over it and a re-raise
     back is one row, not three.
 

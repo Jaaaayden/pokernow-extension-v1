@@ -46,11 +46,12 @@ from pnt.stats.queries import (
     display_names,
     facts_for,
     hand_list,
+    player_games,
     positional_report,
     report,
 )
 from pnt.stats.ranges import composition, range_grid, sizing_tells
-from pnt.stats.review import mark_reviewed, review_hand_list, reviewed_marks
+from pnt.stats.review import hand_notes, mark_reviewed, review_hand_list, reviewed_marks, set_note
 
 DB_PATH = Path(os.environ.get("PNT_DB", "pokernow.sqlite"))
 STATIC = Path(__file__).parent / "static"
@@ -543,7 +544,30 @@ def player_hands(
     # One connection for both halves: db() opens a fresh one per call.
     conn = db()
     facts = _spot_facts(alias, filter, game, conn)
-    return {"player": alias, "filter": filter, "hands": hand_list(facts, display_names(conn))}
+    rows = hand_list(facts, display_names(conn))
+    # The marks and notes the review rows carry, so any hand -- flagged or not --
+    # can be ticked off and written on from the session view.
+    marks = reviewed_marks(conn, game)
+    notes = hand_notes(conn, game)
+    for r in rows:
+        key = (r["game_id"], r["hand_number"])
+        note = notes.get(key) or {}
+        r.update(
+            reviewed=key in marks,
+            reviewed_at=marks.get(key),
+            note=note.get("note"),
+            noted_at=note.get("noted_at"),
+        )
+    return {"player": alias, "filter": filter, "hands": rows}
+
+
+@app.get("/players/{alias}/games")
+def player_game_list(alias: str) -> list[dict]:
+    """Every game one player was dealt into, newest first: the session view's picker."""
+    try:
+        return player_games(db(), alias)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/hands/{hand_id}")
@@ -594,6 +618,21 @@ def hand(hand_id: int) -> dict:
     }
 
 
+def _hand_key(conn, hand_id: int):
+    """The (game_id, hand_number) a hand is stored under, or 404.
+
+    Both judgement writes take a `hand_id` -- that is what a row on the page
+    already holds -- and store what they are told under the hand's own number in
+    its game, which a rebuild does not move. See schema.sql.
+    """
+    row = conn.execute(
+        "SELECT game_id, hand_number FROM hands WHERE hand_id = ?", (hand_id,)
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="no such hand")
+    return row
+
+
 class ReviewedRequest(BaseModel):
     reviewed: bool = True
 
@@ -602,16 +641,11 @@ class ReviewedRequest(BaseModel):
 def set_reviewed(hand_id: int, req: Annotated[ReviewedRequest, Body()]) -> dict:
     """Mark one hand as reviewed, or clear the mark.
 
-    Addressed by `hand_id` because that is what a row on the page already holds,
-    but stored under the hand's (game_id, hand_number) -- see schema.sql -- so the
+    Stored under the hand's (game_id, hand_number) -- see `_hand_key` -- so the
     mark survives the rebuild that gives the hand a new id.
     """
     conn = db()
-    row = conn.execute(
-        "SELECT game_id, hand_number FROM hands WHERE hand_id = ?", (hand_id,)
-    ).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail="no such hand")
+    row = _hand_key(conn, hand_id)
     at = mark_reviewed(conn, row["game_id"], row["hand_number"], req.reviewed)
     return {
         "hand_id": hand_id,
@@ -629,6 +663,42 @@ def reviewed(game: str = Query(None, description="Restrict to one game_id.")) ->
     return [
         {"game_id": g, "hand_number": n, "reviewed_at": at}
         for (g, n), at in sorted(marks.items(), key=lambda kv: (kv[1], kv[0]), reverse=True)
+    ]
+
+
+class NoteRequest(BaseModel):
+    #: What you found in the hand. Empty, or nothing but spaces, clears the note.
+    note: str = ""
+
+
+@app.post("/hands/{hand_id}/note")
+def write_note(hand_id: int, req: Annotated[NoteRequest, Body()]) -> dict:
+    """Write down what went wrong in one hand, or clear the note.
+
+    Keyed like the mark, and addressed by `hand_id` for the same reason. Setting a
+    note does not mark the hand reviewed and clearing the mark does not erase the
+    note: the two are separate judgements, and a hand you have written a question
+    about is often one you have not finished with.
+    """
+    conn = db()
+    row = _hand_key(conn, hand_id)
+    note = set_note(conn, row["game_id"], row["hand_number"], req.note)
+    return {
+        "hand_id": hand_id,
+        "game_id": row["game_id"],
+        "hand_number": row["hand_number"],
+        "note": note["note"] if note else None,
+        "noted_at": note["noted_at"] if note else None,
+    }
+
+
+@app.get("/notes")
+def notes(game: str = Query(None, description="Restrict to one game_id.")) -> list[dict]:
+    """Every hand you have written a note on, newest note first."""
+    rows = hand_notes(db(), game)
+    return [
+        {"game_id": g, "hand_number": n, **v}
+        for (g, n), v in sorted(rows.items(), key=lambda kv: (kv[1]["noted_at"], kv[0]), reverse=True)
     ]
 
 

@@ -618,6 +618,105 @@ def test_a_review_with_no_marks_says_so(db):
     assert all(h["reviewed_at"] is None for h in out["hands"])
 
 
+def test_a_note_survives_the_rebuild_that_moves_every_hand_id(db):
+    """A note is keyed like a mark, and for the same reason."""
+    from pnt.ingest.importer import rebuild_game
+
+    rv.set_note(db, HU_GAME, 53, "turn barrel had no fold equity")
+    rebuild_game(db, HU_GAME)
+    assert rv.note_of(db, HU_GAME, 53)["note"] == "turn barrel had no fold equity"
+    assert rv.hand_notes(db, HU_GAME).keys() == {(HU_GAME, 53)}
+    assert set(rv.hand_notes(db)) == {(HU_GAME, 53)}
+
+
+def test_writing_a_note_again_replaces_it_and_restamps_the_time(db):
+    game, number = _flagged(db)
+    first = rv.set_note(db, game, number, "called too wide")
+    again = rv.set_note(db, game, number, "no: the flop raise was the mistake")
+    assert again["note"] == "no: the flop raise was the mistake"
+    assert again["noted_at"] >= first["noted_at"]
+    assert rv.note_of(db, game, number) == again
+
+
+def test_an_empty_note_is_no_note(db):
+    """There is no difference between a note of spaces and none, either way in."""
+    game, number = _flagged(db)
+    assert rv.set_note(db, game, number, "   ") is None
+    assert rv.note_of(db, game, number) is None
+    rv.set_note(db, game, number, "  mind the sizing  ")
+    assert rv.note_of(db, game, number)["note"] == "mind the sizing"
+    assert rv.set_note(db, game, number, "") is None
+    assert rv.set_note(db, game, number, None) is None  # no-op, not an error
+    assert rv.note_of(db, game, number) is None
+
+
+def test_noting_a_hand_that_is_not_there_raises_but_clearing_one_does_not(db):
+    with pytest.raises(ValueError, match="no hand #99999"):
+        rv.set_note(db, HU_GAME, 99999, "x")
+    with pytest.raises(ValueError):
+        rv.set_note(db, "nosuchgame", 1, "x")
+    assert rv.set_note(db, "nosuchgame", 1, None) is None
+
+
+def test_a_note_and_a_mark_do_not_touch_each_other(db):
+    """The point of the two being separate: unticking a hand you want to look at
+    again must not throw away what you wrote about it."""
+    game, number = _flagged(db)
+    rv.set_note(db, game, number, "check the river call")
+    assert not rv.is_reviewed(db, game, number)  # a note does not mark it
+
+    rv.mark_reviewed(db, game, number)
+    rv.mark_reviewed(db, game, number, reviewed=False)
+    assert rv.note_of(db, game, number)["note"] == "check the river call"
+
+    rv.mark_reviewed(db, game, number)
+    rv.set_note(db, game, number, None)
+    assert rv.is_reviewed(db, game, number)
+
+
+def test_every_row_of_a_noted_hand_carries_the_note(db):
+    game, number = _flagged(db)
+    row = rv.set_note(db, game, number, "overfolded the turn")
+    out = rv.review_hand_list(db, "genericpoker")
+    noted = [h for h in out["hands"] if (h["game_id"], h["hand_number"]) == (game, number)]
+    assert noted and all(h["note"] == row["note"] and h["noted_at"] == row["noted_at"] for h in noted)
+    assert all(h["note"] is None for h in out["hands"] if h not in noted)
+    assert out["noted"] == len(noted)
+
+
+def test_a_review_with_no_notes_says_so(db):
+    out = rv.review_hand_list(db, "genericpoker")
+    assert out["noted"] == 0
+    assert all(h["note"] is None and h["noted_at"] is None for h in out["hands"])
+
+
+def test_the_cli_notes_lists_and_filters(db, tmp_path):
+    from pnt import cli
+
+    path = str(tmp_path / "t.sqlite")
+    runner = CliRunner()
+    assert "nothing noted" in runner.invoke(cli.app, ["note", "--db", path]).output
+
+    r = runner.invoke(cli.app, ["note", THREE_GAME, "212", "raise the flop", "--db", path])
+    assert r.exit_code == 0 and "noted" in r.output
+    assert runner.invoke(cli.app, ["note", THREE_GAME, "212", "--db", path]).output.strip() == "raise the flop"
+    listed = runner.invoke(cli.app, ["note", "--db", path]).output
+    assert f"{THREE_GAME}  #212" in listed and "raise the flop" in listed
+
+    review = runner.invoke(cli.app, ["review", "genericpoker", "--db", path])
+    assert review.exit_code == 0, review.output
+    assert "noted 1" in review.output and "| raise the flop" in review.output
+    only = runner.invoke(cli.app, ["review", "genericpoker", "--db", path, "--noted"])
+    assert only.exit_code == 0 and only.output.count("| raise the flop") == 1
+
+    assert runner.invoke(cli.app, ["note", THREE_GAME, "212", "--db", path, "--clear"]).exit_code == 0
+    assert "nothing noted" in runner.invoke(cli.app, ["note", "--db", path]).output
+    assert "no note" in runner.invoke(cli.app, ["note", THREE_GAME, "212", "--db", path]).output
+    assert runner.invoke(cli.app, ["note", THREE_GAME, "99999", "x", "--db", path]).exit_code != 0
+    assert runner.invoke(cli.app, ["note", THREE_GAME, "--db", path]).exit_code != 0
+    assert runner.invoke(cli.app, ["note", THREE_GAME, "212", "x", "--clear", "--db", path]).exit_code != 0
+
+
 def test_the_cli_marks_lists_and_filters(db, tmp_path):
     from pnt import cli
 

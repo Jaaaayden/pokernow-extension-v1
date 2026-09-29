@@ -159,20 +159,33 @@
     color: var(--ink-2); white-space: nowrap; }
   .hand-row .kind[data-group=beat] { border-color: var(--accent); color: var(--accent); }
   .hand-row .why { flex-basis: 100%; color: var(--ink-2); font-size: 12px; }
-  /* A flagged row and its "reviewed" mark. The mark sits beside the row, not in
-     it: the row is itself a button, and a button may not contain another. */
+  /* A flagged row, its "reviewed" mark and its note. Both buttons sit beside the
+     row, not in it: the row is itself a button, and a button may not contain
+     another. The note runs full width underneath, in the second column. */
   .rev-row { display: flex; align-items: flex-start; gap: 6px; border-bottom: 1px solid var(--grid); }
-  .rev-row .hand-row { flex: 1; min-width: 0; border-bottom: 0; }
-  .rev-row .seen { flex: none; margin-top: 6px; width: 22px; height: 22px; padding: 0; line-height: 1;
+  .rev-row .marks { flex: none; display: flex; flex-direction: column; gap: 4px; margin-top: 6px; }
+  .rev-body { flex: 1; min-width: 0; }
+  .rev-row .hand-row { width: 100%; border-bottom: 0; }
+  .rev-row .marks button { width: 22px; height: 22px; padding: 0; line-height: 1;
     border-radius: 6px; color: var(--muted); font-size: 12px; }
-  .rev-row .seen[aria-pressed=true] { color: var(--accent); border-color: var(--accent); }
-  /* Marked rows stay in place and step back, so the list keeps its shape. */
+  .rev-row .marks button[aria-pressed=true] { color: var(--accent); border-color: var(--accent); }
+  /* Marked rows stay in place and step back, so the list keeps its shape. A note
+     never fades: it is the one thing on the row you wrote yourself. */
   .rev-row[data-reviewed=true] .hand-row { opacity: .5; }
   .rev-row[data-reviewed=true] .hand-row:hover { opacity: 1; }
+  .rev-note { font-size: 12px; color: var(--ink-2); margin: 0 0 6px; padding-left: 2px;
+    white-space: pre-wrap; overflow-wrap: anywhere; border-left: 2px solid var(--accent); padding: 2px 0 2px 8px; }
+  .rev-note.empty { display: none; }
+  .rev-edit { display: flex; flex-direction: column; gap: 4px; margin: 0 0 8px; }
+  .rev-edit textarea { width: 100%; min-height: 3.4em; resize: vertical; font: inherit; font-size: 12px;
+    color: var(--ink); background: var(--surface); border: 1px solid var(--ring); border-radius: 6px; padding: 6px 8px; }
+  .rev-edit .hint { color: var(--muted); font-size: 11px; }
   #review-count { margin: 0 0 6px; font-size: 12px; }
   .kinds { display: inline-flex; flex-wrap: wrap; gap: 4px; }
   .kinds button { font-size: 12px; padding: 3px 8px; border-radius: 999px; color: var(--ink-2); }
   .kinds button[aria-pressed=true] { background: var(--accent); color: #fff; border-color: transparent; }
+  /* The list views' on/off switches (Played only, Hide reviewed, Side by side). */
+  #reviewctl > button[aria-pressed=true] { color: var(--accent); border-color: var(--accent); }
   .kinds button small { opacity: .8; margin-left: 4px; }
   .cards { font-family: ui-monospace, Consolas, monospace; }
   .replay { margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--grid); font-size: 13px; }
@@ -185,6 +198,24 @@
   .replay ol { margin: 4px 0 0; padding-left: 22px; }
   .replay li.forced { color: var(--muted); }
   .muted { color: var(--muted); }
+
+  /* --- side by side: the list on the left, the replay on the right ---
+     The replay pane sticks to the top of the window and scrolls on its own, so
+     clicking down a list never moves the page. The page widens to make room.
+     Narrow (the extension side panel, a small window) it stacks again. */
+  body.wide main { max-width: 1400px; }
+  #review.split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 16px; align-items: start; }
+  #review.split #review-count { grid-column: 1 / -1; }
+  #review.split .hand-rows.tall { max-height: calc(100vh - 140px); }
+  #review.split .replay { position: sticky; top: 12px; margin-top: 0; padding: 0 0 0 16px; border-top: 0;
+    border-left: 1px solid var(--grid); max-height: calc(100vh - 24px); overflow-y: auto; }
+  @media (max-width: 900px) {
+    body.wide main { max-width: 960px; }
+    #review.split { display: block; }
+    #review.split .hand-rows.tall { max-height: 560px; }
+    #review.split .replay { position: static; margin-top: 12px; padding: 12px 0 0; border-left: 0;
+      border-top: 1px solid var(--grid); max-height: none; }
+  }
 
   /* --- postflop strip --- */
   .strip { background: var(--surface); border: 1px solid var(--ring); border-radius: 10px;
@@ -297,6 +328,7 @@
       <button data-view="sizing" aria-pressed="false">Sizing</button>
       <button data-view="review" aria-pressed="false" title="hands worth a replay: missed bluffs, missed value, failed bluffs">Hand review</button>
       <button data-view="beats" aria-pressed="false" title="suckouts and coolers">Bad beats</button>
+      <button data-view="session" aria-pressed="false" title="every hand of one session, flagged or not">Session</button>
     </span>
   </div>
   <div class="controls narrow">
@@ -347,12 +379,16 @@
       </span>
       <span class="ctl hidden" id="reviewctl">
         <span class="kinds" id="review-kinds" role="group" aria-label="Which flags"></span>
+        <select id="session-game" class="hidden" aria-label="Session"></select>
+        <button id="session-played" class="hidden" aria-pressed="true" title="leave out the hands that were only a preflop fold">Played only</button>
         <select id="review-sort" aria-label="Order">
+          <option value="hand">hand order</option>
           <option value="newest">newest first</option>
           <option value="pot">biggest pot first</option>
           <option value="swing">biggest swing first</option>
         </select>
         <button id="review-seen" aria-pressed="false" title="hide the hands already marked reviewed">Hide reviewed</button>
+        <button id="review-split" aria-pressed="false" title="list on the left, replay on the right">Side by side</button>
       </span>
       <button id="tabletoggle" aria-pressed="false">Table</button>
     </div>
@@ -518,23 +554,38 @@
   }
   const state = { player: null, filter: "", by: "preflop", color: "net", street: "flop", kind: "cbet",
                   table: false, data: null, handRows: null, handSort: "newest", handIds: null,
-                  order: "newest", hide: new Set(), hideSeen: false, review: null };
+                  order: null, hide: new Set(), hideSeen: false, review: null,
+                  game: null, games: null, played: true, session: null, split: false };
+
+  // The side-by-side layout is a per-viewer setting, kept in this browser only.
+  // Storage can be missing or throw (private windows, blocked site data), and the
+  // page must work the same without it.
+  const LAYOUT_KEY = "pnt.reviewLayout";
+  try { state.split = localStorage.getItem(LAYOUT_KEY) === "split"; } catch { /* stacked */ }
 
   // ---- hand review ------------------------------------------------------
   // Both views read one endpoint and split its rows by group; see "Hand review"
   // in SPEC.md for what each flag means.
   const REVIEW_VIEWS = ["review", "beats"];
   const isReview = (view) => REVIEW_VIEWS.includes(view);
-  const VIEWS = ["preflop", "made", "sizing", ...REVIEW_VIEWS];
+  // The session view lists every hand of one game, flagged or not, with the same
+  // marks and notes as the review views. Those three are the "list views".
+  const SESSION_VIEW = "session";
+  const isListView = (view) => isReview(view) || view === SESSION_VIEW;
+  const VIEWS = ["preflop", "made", "sizing", ...REVIEW_VIEWS, SESSION_VIEW];
   const REVIEW_KINDS = {
     review: [["missed_bluff", "Missed bluff"], ["missed_value", "Missed value"], ["failed_bluff", "Failed bluff"]],
     beats: [["suckout", "Suckout"], ["cooler_pre", "Preflop cooler"], ["cooler_post", "Postflop cooler"]],
   };
   const KIND_LABEL = Object.fromEntries(Object.values(REVIEW_KINDS).flat());
   const ALL_KINDS = Object.keys(KIND_LABEL);
-  const ORDERS = { review: ["newest", "pot"], beats: ["newest", "pot", "swing"] };
+  // The first order of each view is its default.
+  const ORDERS = { review: ["newest", "pot"], beats: ["newest", "pot", "swing"], session: ["hand", "newest", "pot", "swing"] };
+  const ORDER_NAMES = ORDERS.session;
+  const orderOf = (view) => ORDERS[view].includes(state.order) ? state.order : ORDERS[view][0];
   const REVIEW_NOTE = {
     review: "A flag is a prompt to open the replay, not a verdict. Missed bluffs and missed value need every live hand shown, so they come from showdowns only; a failed bluff also counts bluffs given up on before showdown.",
+    session: "Every hand of the session, in the order it was dealt. Flagged hands carry their flag; tick a hand off or write on it as you go.",
     beats: "Bookkeeping. Suckouts and preflop coolers are all-in showdowns with every hand shown, their equity taken where the betting stopped; a postflop cooler is a stacks hand already behind on a dry board.",
   };
 
@@ -544,7 +595,9 @@
     state.player = q.get("player");
     state.filter = q.get("filter") || "";
     state.by = VIEWS.includes(q.get("by")) ? q.get("by") : "preflop";
-    state.order = ["pot", "swing"].includes(q.get("order")) ? q.get("order") : "newest";
+    state.order = ORDER_NAMES.includes(q.get("order")) ? q.get("order") : null;
+    state.game = q.get("game") || null;
+    state.played = q.get("played") !== "all";
     state.hide = new Set((q.get("hide") || "").split(",").filter(k => ALL_KINDS.includes(k)));
     state.hideSeen = q.get("seen") === "hide";
     const c = q.get("color") === "freq" ? "pfr" : q.get("color");
@@ -559,10 +612,14 @@
     if (state.by !== "preflop") q.set("by", state.by);
     if (state.color !== "net") q.set("color", state.color);
     if (state.by === "sizing") { q.set("street", state.street); q.set("kind", state.kind); }
-    if (isReview(state.by)) {
-      if (state.order !== "newest") q.set("order", state.order);
+    if (isListView(state.by)) {
+      if (state.order && state.order !== ORDERS[state.by][0]) q.set("order", state.order);
       if (state.hide.size) q.set("hide", [...state.hide].join(","));
       if (state.hideSeen) q.set("seen", "hide");
+    }
+    if (state.by === SESSION_VIEW) {
+      if (state.game) q.set("game", state.game);
+      if (!state.played) q.set("played", "all");
     }
     if (theme) q.set("theme", theme);
     history.replaceState(null, "", "?" + q.toString());
@@ -625,7 +682,9 @@
     const q = new URLSearchParams();
     if (state.filter) q.set("filter", state.filter);
     try {
-      if (isReview(state.by)) {
+      if (state.by === SESSION_VIEW) {
+        state.data = await loadSession(quiet);
+      } else if (isReview(state.by)) {
         // One request serves both views: switching between them re-renders
         // rather than re-fetching, unless the HUD said there are new hands.
         const key = `${state.player}|${state.filter}`;
@@ -657,6 +716,60 @@
     } finally {
       $("card").classList.remove("loading");
     }
+  }
+
+  // The player's games, newest first, for the session picker. Fetched once per
+  // player; a quiet reload (the HUD saying there are new hands) asks again, since
+  // a new game may just have started.
+  async function loadGames(quiet) {
+    if (quiet || state.games?.player !== state.player) {
+      const rows = await getJson(`/players/${encodeURIComponent(state.player)}/games`);
+      state.games = { player: state.player, rows };
+    }
+    const rows = state.games.rows;
+    // A game the player was not in -- another player's session in the URL, or
+    // none asked for -- falls back to their latest.
+    if (!rows.some(g => g.game_id === state.game)) state.game = rows[0]?.game_id ?? null;
+    const sel = $("session-game");
+    sel.replaceChildren();
+    for (const g of rows) {
+      const o = document.createElement("option");
+      o.value = g.game_id;
+      const d = new Date(g.first_ts || g.started_at);
+      const when = isNaN(d) ? g.game_id : SESSION_DATE.format(d);
+      o.textContent = `${when} · ${g.hands} hands${g.bb ? ` · ${g.sb}/${g.bb}` : ""}`;
+      o.title = g.game_id;
+      sel.appendChild(o);
+    }
+    sel.value = state.game ?? "";
+  }
+  const SESSION_DATE = new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+
+  // Every hand of one game, with the flags the review views would give it merged
+  // onto the row: one list, so a flagged hand is never shown twice.
+  async function loadSession(quiet) {
+    await loadGames(quiet);
+    const key = `${state.player}|${state.filter}|${state.game}`;
+    if (!quiet && state.session?.key === key) return state.session.data;
+    const player = encodeURIComponent(state.player);
+    const q = new URLSearchParams();
+    if (state.filter) q.set("filter", state.filter);
+    if (state.game) q.set("game", state.game);
+    const [hands, review] = state.game
+      ? await Promise.all([getJson(`/players/${player}/hands?` + q), getJson(`/players/${player}/review?` + q)])
+      : [{ hands: [] }, { hands: [] }];
+    if (hands.hands.length && !("reviewed" in hands.hands[0])) {
+      throw new Error("the running server is older than this page: restart `pnt service` (or `pnt serve`)");
+    }
+    const flags = new Map();
+    for (const r of review.hands) {
+      if (!flags.has(r.hand_id)) flags.set(r.hand_id, []);
+      flags.get(r.hand_id).push({ kind: r.kind, label: KIND_LABEL[r.kind] || r.label, group: r.group, why: r.why });
+    }
+    for (const h of hands.hands) h.flags = flags.get(h.hand_id) || [];
+    const data = { player: state.player, filter: state.filter, game: state.game, hands: hands.hands };
+    state.session = { key, data };
+    return data;
   }
 
   // ---- render ----------------------------------------------------------
@@ -691,15 +804,16 @@
   }
   const TITLE = {
     preflop: "Starting hands", made: "What they had made", sizing: "What they had, by bet size",
-    review: "Hands to review", beats: "Bad beats",
+    review: "Hands to review", beats: "Bad beats", session: "Session",
   };
 
   function render() {
     const d = state.data;
     const view = state.by;
-    const review = isReview(view);
+    const review = isListView(view);
     const table = state.table && !review;
-    if (review) renderReviewTiles(d, view);
+    if (view === SESSION_VIEW) renderSessionTiles(d);
+    else if (review) renderReviewTiles(d, view);
     else if (view === "sizing") renderSizingTiles(d);
     else renderRangeTiles(d);
     $("subtitle").textContent = `${d.player} · ${d.filter || "all hands"}`;
@@ -717,6 +831,8 @@
     $("sizing").classList.toggle("hidden", view !== "sizing" || table);
     $("table").classList.toggle("hidden", !table);
     $("review").classList.toggle("hidden", !review);
+    applyLayout();
+    if (view === SESSION_VIEW) { renderSession(d); return; }
     if (review) { renderReview(d, view); return; }
     if (view === "preflop") renderGrid(d);
     else if (view === "made") renderClassBars($("bars"), d.classes, "");
@@ -775,6 +891,17 @@
     $("t-raise").textContent = rows.length ? `${Math.round(biggest)} bb` : "–";
     const skipped = d.skipped.stack_unknown ? ` · ${d.skipped.stack_unknown} with a stack unknown` : "";
     setRaiseKey("biggest pot flagged", `${rows.length} flagged · ${d.skipped.cards_unknown} showdowns mucked${skipped}`);
+  }
+
+  function renderSessionTiles(d) {
+    setTileKeys("hands dealt", "hands played", "net");
+    const net = d.hands.reduce((s, h) => s + (h.net_bb ?? 0), 0);
+    $("t-hands").textContent = d.hands.length;
+    $("t-known").textContent = d.hands.filter(played).length;
+    $("t-cov").textContent = d.hands.length ? fmtBb(net) : "–";
+    $("t-raise").textContent = d.hands.filter(h => h.flags.length).length;
+    const seen = d.hands.filter(h => h.reviewed).length;
+    setRaiseKey("flagged for review", `${seen} of ${d.hands.length} marked reviewed`);
   }
 
   // value -> [fillColor, deep?] for the current color mode
@@ -1141,7 +1268,9 @@
 
   // Newest is the server's order; the others sort that, ties staying newest first.
   function orderReview(rows, view) {
-    const order = ORDERS[view].includes(state.order) ? state.order : "newest";
+    const order = orderOf(view);
+    // Hand order is the order it was dealt: one game, so the hand number is enough.
+    if (order === "hand") return [...rows].sort((a, b) => a.hand_number - b.hand_number);
     if (order === "pot") return [...rows].sort((a, b) => (b.pot_bb ?? b.pot ?? -1) - (a.pot_bb ?? a.pot ?? -1));
     if (order === "swing") return [...rows].sort((a, b) => Math.abs(b.diff_bb ?? b.net_bb ?? 0) - Math.abs(a.diff_bb ?? a.net_bb ?? 0));
     return rows;
@@ -1186,15 +1315,13 @@
       });
       chips.appendChild(b);
     }
-    const sort = $("review-sort");
-    [...sort.options].forEach(o => { o.hidden = o.disabled = !ORDERS[view].includes(o.value); });
-    sort.value = ORDERS[view].includes(state.order) ? state.order : "newest";
+    syncListControls(view);
 
     const all = reviewRows(d, view);
     const rows = orderReview(listedReview(all), view);
     const list = $("review-rows");
     list.replaceChildren();
-    $("review-replay").classList.add("hidden");
+    resetReplay();
     setReviewCount();
     if (!rows.length) {
       const hidden = state.hideSeen && all.length;
@@ -1214,31 +1341,131 @@
     }
   }
 
-  // ---- marking a hand reviewed -------------------------------------------
-  // The mark is on the hand, and it is the server that holds it: the click is
-  // not believed until the write comes back. See SPEC.md, "Marking a hand
-  // reviewed", and schema.sql for why it is not stored against the hand id.
+  // The controls every list view shares, set for this one: the orders it offers,
+  // and the session picker only where there is a session.
+  function syncListControls(view) {
+    const sort = $("review-sort");
+    [...sort.options].forEach(o => { o.hidden = o.disabled = !ORDERS[view].includes(o.value); });
+    sort.value = orderOf(view);
+    const session = view === SESSION_VIEW;
+    $("session-game").classList.toggle("hidden", !session);
+    $("session-played").classList.toggle("hidden", !session);
+    $("session-played").setAttribute("aria-pressed", state.played);
+  }
+
+  // A hand counts as played when they put chips in by choice or saw a flop; a
+  // flagged hand is always listed, whatever it was.
+  const played = (h) => h.vpip || h.saw_flop;
+  const sessionRows = (d) => d.hands.filter(h => !state.played || played(h) || h.flags.length);
+  const listRows = (view) => view === SESSION_VIEW ? sessionRows(state.data) : reviewRows(state.data, view);
+
+  function renderSession(d) {
+    $("review-kinds").replaceChildren();
+    syncListControls(SESSION_VIEW);
+    const all = sessionRows(d);
+    const rows = orderReview(listedReview(all), SESSION_VIEW);
+    const list = $("review-rows");
+    list.replaceChildren();
+    resetReplay();
+    setReviewCount();
+    if (!rows.length) {
+      list.appendChild(message(!state.game ? "no sessions for this player"
+        : state.hideSeen && all.length ? "every hand here is reviewed"
+        : d.hands.length ? "no hands played in this spot — turn off Played only" : "no hands in this spot"));
+      return;
+    }
+    for (const h of rows.slice(0, HAND_LIMIT)) {
+      const f = h.flags[0];
+      const row = handRowButton(h, list, $("review-replay"), {
+        kind: f ? { text: f.label, group: f.group } : null,
+        why: h.flags.map(x => x.why).filter(Boolean).join(" · ") || undefined,
+        title: h.flags.length > 1 ? "flagged: " + h.flags.map(x => x.label).join(", ") : "",
+      });
+      list.appendChild(reviewedRow(h, row));
+    }
+  }
+
+  // ---- side by side ------------------------------------------------------
+  // In the split layout the replay pane is always there, so the right half does
+  // not collapse before a hand is picked.
+  function resetReplay() {
+    const box = $("review-replay");
+    if (state.split && isListView(state.by)) {
+      box.classList.remove("hidden");
+      box.replaceChildren(message("click a hand to replay it · ↑ ↓ to step through"));
+    } else {
+      box.classList.add("hidden");
+    }
+  }
+
+  function applyLayout() {
+    const split = state.split && isListView(state.by);
+    $("review").classList.toggle("split", split);
+    document.body.classList.toggle("wide", split);
+    $("review-split").setAttribute("aria-pressed", state.split);
+  }
+
+  // ---- marking a hand reviewed, and noting what went wrong ----------------
+  // Both are on the hand, and it is the server that holds them: a click or a
+  // typed note is not believed until the write comes back. See SPEC.md, "Marking
+  // a hand reviewed, and writing down what went wrong", and schema.sql for why
+  // neither is stored against the hand id. The two are independent -- unmarking
+  // a hand keeps its note.
 
   const listedReview = (rows) => rows.filter(h => !(state.hideSeen && h.reviewed));
 
-  // How many rows this view lists, and how many of its flags are marked. Read
-  // off state rather than passed in, so a toggle can refresh it without a render.
+  // How many rows this view lists, how many of its flags are marked, and how
+  // many carry a note. Read off state rather than passed in, so a toggle can
+  // refresh it without a render.
   function setReviewCount() {
-    const all = reviewRows(state.data, state.by);
+    const all = listRows(state.by);
     const n = listedReview(all).length;
     const seen = all.filter(h => h.reviewed).length;
+    const noted = all.filter(h => h.note).length;
+    const what = state.by === SESSION_VIEW ? "hand" : "flagged hand";
+    const order = $("review-sort").value;
     const head = n > HAND_LIMIT
-      ? `${$("review-sort").value === "newest" ? "newest" : "top"} ${HAND_LIMIT} of ${n} flagged hands`
-      : `${n} flagged hand${n === 1 ? "" : "s"}`;
-    $("review-count").textContent = seen ? `${head} · ${seen} reviewed` : head;
+      ? `${order === "newest" ? "newest" : order === "hand" ? "first" : "top"} ${HAND_LIMIT} of ${n} ${what}s`
+      : `${n} ${what}${n === 1 ? "" : "s"}`;
+    $("review-count").textContent = [head, seen ? `${seen} reviewed` : "", noted ? `${noted} noted` : ""]
+      .filter(Boolean).join(" · ");
+  }
+
+  // One hand's rows are one hand: a missed bluff and a beat on the same replay
+  // move together, including the rows of the view that is not on show.
+  // The session view and the review views hold their own copies of a hand, so a
+  // mark made in one is carried into the other.
+  function applyToHand(hand_id, fields) {
+    for (const hands of new Set([state.data?.hands, state.review?.data.hands, state.session?.data.hands])) {
+      for (const other of hands || []) {
+        if (other.hand_id === hand_id) Object.assign(other, fields);
+      }
+    }
+  }
+
+  function showErr(e) {
+    $("err").textContent = String(e.message || e);
+    $("err").classList.remove("hidden");
   }
 
   function reviewedRow(h, row) {
     const wrap = document.createElement("div");
     wrap.className = "rev-row";
+    const marks = document.createElement("div");
+    marks.className = "marks";
+    const body = document.createElement("div");
+    body.className = "rev-body";
+    const note = document.createElement("p");
+    note.className = "rev-note";
+
     const mark = document.createElement("button");
     mark.type = "button";
     mark.className = "seen";
+    const pen = document.createElement("button");
+    pen.type = "button";
+    pen.className = "note";
+    pen.textContent = "✎";
+
     const paint = () => {
       wrap.dataset.reviewed = String(!!h.reviewed);
       mark.setAttribute("aria-pressed", String(!!h.reviewed));
@@ -1247,33 +1474,93 @@
         ? `reviewed ${(h.reviewed_at || "").slice(0, 10)} — click to unmark`
         : "mark this hand reviewed";
       mark.setAttribute("aria-label", `hand ${h.hand_number} reviewed`);
+      pen.setAttribute("aria-pressed", String(!!h.note));
+      pen.title = h.note
+        ? `noted ${(h.noted_at || "").slice(0, 10)} — click to edit`
+        : "write down what went wrong";
+      pen.setAttribute("aria-label", `note on hand ${h.hand_number}`);
+      note.textContent = h.note || "";
+      note.classList.toggle("empty", !h.note);
     };
     paint();
+
     mark.addEventListener("click", async () => {
       mark.disabled = true;
       try {
         const out = await postJson(`/hands/${h.hand_id}/reviewed`, { reviewed: !h.reviewed });
-        // One hand can carry two flags -- a missed bluff and a beat -- and they
-        // are one replay, so every row of that hand moves together, including
-        // the rows of the view that is not on show.
-        for (const other of state.data.hands) {
-          if (other.hand_id !== h.hand_id) continue;
-          other.reviewed = out.reviewed;
-          other.reviewed_at = out.reviewed_at;
-        }
+        applyToHand(h.hand_id, { reviewed: out.reviewed, reviewed_at: out.reviewed_at });
         // Hidden rows leave the list, which needs the render; otherwise the row
         // is repainted where it is, so an open replay stays open.
         if (state.hideSeen) { render(); return; }
         paint();
         setReviewCount();
       } catch (e) {
-        $("err").textContent = String(e.message || e);
-        $("err").classList.remove("hidden");
+        showErr(e);
       } finally {
         mark.disabled = false;
       }
     });
-    wrap.append(mark, row);
+
+    // The editor replaces the note in place, so the row never moves under the
+    // cursor. Ctrl+Enter or leaving the box saves, Escape abandons the edit.
+    // `edit` is the row's, not the click's: the pen has to be able to close an
+    // editor a previous click opened.
+    let edit = null;
+
+    function closeEdit() {
+      if (!edit) return;
+      // Cleared first: taking the focused box out of the page can fire its own
+      // blur, and that handler must find the edit already over.
+      const box = edit;
+      edit = null;
+      box.replaceWith(note);
+      paint();
+    }
+
+    async function save(box) {
+      if (!edit) return;
+      if (box.value.trim() === (h.note || "").trim()) { closeEdit(); return; }
+      box.disabled = true;
+      try {
+        const out = await postJson(`/hands/${h.hand_id}/note`, { note: box.value });
+        applyToHand(h.hand_id, { note: out.note, noted_at: out.noted_at });
+        closeEdit();
+        setReviewCount();
+      } catch (e) {
+        // The note is still in the box, and the box stays open with it.
+        box.disabled = false;
+        box.focus();
+        showErr(e);
+      }
+    }
+
+    pen.addEventListener("click", () => {
+      // A click on the pen while editing has already blurred the box, which
+      // saved and closed it; this is the one that opens it again.
+      if (edit) { closeEdit(); return; }
+      edit = document.createElement("div");
+      edit.className = "rev-edit";
+      const box = document.createElement("textarea");
+      box.value = h.note || "";
+      box.setAttribute("aria-label", `note on hand ${h.hand_number}`);
+      const hint = document.createElement("span");
+      hint.className = "hint";
+      hint.textContent = "Ctrl+Enter or click away to save · Esc to cancel · empty to delete";
+      edit.append(box, hint);
+      note.replaceWith(edit);
+      pen.setAttribute("aria-pressed", "true");
+      box.focus();
+      box.setSelectionRange(box.value.length, box.value.length);
+      box.addEventListener("keydown", (ev) => {
+        if (ev.key === "Escape") { ev.stopPropagation(); closeEdit(); }
+        else if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)) { ev.preventDefault(); save(box); }
+      });
+      box.addEventListener("blur", () => save(box));
+    });
+
+    marks.append(mark, pen);
+    body.append(row, note);
+    wrap.append(marks, body);
     return wrap;
   }
 
@@ -1351,6 +1638,7 @@
     state.player = $("player").value;
     state.filter = $("filter").value.trim();
     state.review = null; // Apply always asks the server again
+    state.session = null;
     syncChips();
     closeHands();
     writeUrl();
@@ -1373,18 +1661,48 @@
   $("tabletoggle").addEventListener("click", () => {
     state.table = !state.table; $("tabletoggle").setAttribute("aria-pressed", state.table); if (state.data) render();
   });
-  $("t-hands-tile").addEventListener("click", () => { if (state.player) openHands("All hands in this spot", null); });
+  $("t-hands-tile").addEventListener("click", () => {
+    // The session view is already the list of its hands.
+    if (state.player && state.by !== SESSION_VIEW) openHands("All hands in this spot", null);
+  });
   // The drill-down list and the review views read separate data; opening a view
   // with the list showing would leave a stale list under the new card.
   document.querySelectorAll("[data-view]").forEach(b => b.addEventListener("click", closeHands));
   $("review-sort").addEventListener("change", () => {
-    state.order = $("review-sort").value; writeUrl(); if (state.data && isReview(state.by)) render();
+    state.order = $("review-sort").value; writeUrl(); if (state.data && isListView(state.by)) render();
+  });
+  $("session-game").addEventListener("change", () => {
+    state.game = $("session-game").value; writeUrl(); load();
+  });
+  $("session-played").addEventListener("click", () => {
+    state.played = !state.played; writeUrl(); if (state.data && state.by === SESSION_VIEW) render();
+  });
+  $("review-split").addEventListener("click", () => {
+    state.split = !state.split;
+    try { localStorage.setItem(LAYOUT_KEY, state.split ? "split" : "stacked"); } catch { /* this visit only */ }
+    applyLayout();
+    // A replay already open stays open; with none, the pane shows its placeholder
+    // (or goes away again when leaving the split).
+    if (!$("review-rows").querySelector(".hand-row[aria-pressed=true]")) resetReplay();
+  });
+  // Up and down step through the list, replaying each hand as they land on it.
+  $("review-rows").addEventListener("keydown", (e) => {
+    if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+    if (e.target.closest("textarea")) return;
+    const rows = [...$("review-rows").querySelectorAll(".hand-row")];
+    if (!rows.length) return;
+    const cur = rows.indexOf(e.target.closest(".hand-row") || $("review-rows").querySelector(".hand-row[aria-pressed=true]"));
+    const next = rows[cur < 0 ? 0 : Math.max(0, Math.min(rows.length - 1, cur + (e.key === "ArrowDown" ? 1 : -1)))];
+    e.preventDefault();
+    next.focus();
+    next.scrollIntoView({ block: "nearest" });
+    next.click();
   });
   $("review-seen").addEventListener("click", () => {
     state.hideSeen = !state.hideSeen;
     $("review-seen").setAttribute("aria-pressed", state.hideSeen);
     writeUrl();
-    if (state.data && isReview(state.by)) render();
+    if (state.data && isListView(state.by)) render();
   });
   $("hands-close").addEventListener("click", closeHands);
   $("hands-sort").addEventListener("change", () => {
@@ -1471,7 +1789,9 @@
   $("filter").value = state.filter;
   $("street").value = state.street;
   $("kind").value = state.kind;
-  $("review-sort").value = state.order;
+  if (state.order) $("review-sort").value = state.order;
+  $("review-split").setAttribute("aria-pressed", state.split);
+  $("session-played").setAttribute("aria-pressed", state.played);
   $("review-seen").setAttribute("aria-pressed", state.hideSeen);
   syncChips();
   document.querySelectorAll("[data-view]").forEach(x => x.setAttribute("aria-pressed", x.dataset.view === state.by));

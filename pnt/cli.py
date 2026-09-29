@@ -35,7 +35,14 @@ from .stats.queries import display_names, facts_by_player, facts_for, positional
 from .stats.ranges import SIZING_KINDS, composition, range_grid, sizing_tells
 from .stats.review import KIND_LABELS as REVIEW_LABELS
 from .stats.review import KINDS as REVIEW_KINDS
-from .stats.review import mark_reviewed, review_hand_list, reviewed_marks
+from .stats.review import (
+    hand_notes,
+    mark_reviewed,
+    note_of,
+    review_hand_list,
+    reviewed_marks,
+    set_note,
+)
 
 app = typer.Typer(add_completion=False, help=__doc__)
 alias_app = typer.Typer(help="Manage player identities.")
@@ -681,13 +688,17 @@ def review(
     unreviewed: bool = typer.Option(
         False, "--unreviewed", help="Only hands not yet marked reviewed."
     ),
+    noted: bool = typer.Option(
+        False, "--noted", help="Only hands you have written a note on."
+    ),
     as_json: bool = typer.Option(False, "--json"),
 ) -> None:
     """Hands worth reviewing: missed bluffs, missed value, failed bluffs, and bad beats.
 
-    Newest first, a check mark against the ones already marked with `pnt reviewed`.
-    The same rows the chart's Hand review and Bad beats views list; SPEC.md,
-    "Hand review", defines each flag.
+    Newest first, a check mark against the ones already marked with `pnt reviewed`,
+    and whatever `pnt note` wrote down on its own line underneath. The same rows
+    the chart's Hand review and Bad beats views list; SPEC.md, "Hand review",
+    defines each flag.
     """
     if kind is not None and kind not in REVIEW_KINDS:
         raise typer.BadParameter(f"unknown kind {kind!r}. Known: {', '.join(REVIEW_KINDS)}", param_hint="--kind")
@@ -705,6 +716,8 @@ def review(
         out["hands"] = [h for h in out["hands"] if h["kind"] == kind]
     if unreviewed:
         out["hands"] = [h for h in out["hands"] if not h["reviewed"]]
+    if noted:
+        out["hands"] = [h for h in out["hands"] if h["note"]]
     if as_json:
         typer.echo(json.dumps(out, indent=2))
         return
@@ -715,7 +728,7 @@ def review(
     )
     typer.echo(
         "  ".join(f"{REVIEW_LABELS[k]} {n}" for k, n in out["counts"].items())
-        + f"  |  reviewed {out['reviewed']}"
+        + f"  |  reviewed {out['reviewed']}, noted {out['noted']}"
     )
     sk = out["skipped"]
     if sk["cards_unknown"] or sk["stack_unknown"]:
@@ -731,6 +744,10 @@ def review(
         pot = f"{h['pot_bb']:.0f}bb" if h["pot_bb"] is not None else f"{h['pot']}"
         seen = "x" if h["reviewed"] else " "
         typer.echo(f"{seen} #{h['hand_number']:<5}{REVIEW_LABELS[h['kind']]:<17}pot {pot:>6}  {h['why']}")
+        # Your own words, indented under the flag's. A note can run to several
+        # lines, and every one of them is yours, so none of it is truncated.
+        for line in (h["note"] or "").splitlines():
+            typer.echo(f"    | {line}")
 
 
 @app.command()
@@ -763,6 +780,52 @@ def reviewed(
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from exc
     typer.echo(f"#{hand_number} {game}: " + (f"reviewed {at}" if at else "mark cleared"))
+
+
+@app.command()
+def note(
+    game: str = typer.Argument(None, help="The game_id. Omit to list every note."),
+    hand_number: int = typer.Argument(None, help="The hand number, as the log names it."),
+    text: str = typer.Argument(None, help="What went wrong. Omit to print the note as it stands."),
+    db: Path = DbOpt,
+    clear: bool = typer.Option(False, "--clear", help="Delete the note instead of writing one."),
+) -> None:
+    """Write down what you found in a hand, so the next review has it beside the flag.
+
+    With no arguments, lists every note. With a game and a hand but no text, prints
+    that hand's note. Writing again replaces what is there -- a note is a document,
+    not a log -- and the mark from `pnt reviewed` is separate: neither command
+    touches the other's.
+
+        pnt note pgl41zM3_CKphpnKM1DMIosUT 161 "turn barrel had no fold equity"
+        pnt note pgl41zM3_CKphpnKM1DMIosUT 161 --clear
+        pnt note
+    """
+    conn = connect(db)
+    if game is None or hand_number is None:
+        if game is not None or hand_number is not None:
+            raise typer.BadParameter("give both a game_id and a hand number, or neither")
+        rows = hand_notes(conn)
+        if not rows:
+            typer.echo("(nothing noted)")
+            return
+        for (g, n), v in sorted(rows.items()):
+            typer.echo(f"{g}  #{n:<6}{v['noted_at']}")
+            for line in v["note"].splitlines():
+                typer.echo(f"    | {line}")
+        return
+    if clear and text is not None:
+        raise typer.BadParameter("--clear deletes the note; it takes no text")
+    if text is None and not clear:
+        row = note_of(conn, game, hand_number)
+        typer.echo(row["note"] if row else "(no note on that hand)")
+        return
+    try:
+        row = set_note(conn, game, hand_number, None if clear else text)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(f"#{hand_number} {game}: " + (f"noted {row['noted_at']}" if row else "note cleared"))
 
 
 def _print_grid(grid: dict) -> None:

@@ -435,6 +435,24 @@ The two are independent. Unticking a hand you want to look at again keeps what y
 wrote about it, and a note on a hand you have *not* finished with ("check the turn
 sizing here") is the ordinary case. Writing a note again replaces it.
 
+### Going through a whole session
+
+Flags only catch some mistakes. The chart's **Session** view
+([http://127.0.0.1:52000/chart?by=session](http://127.0.0.1:52000/chart?by=session))
+lists every hand of one game in the order it was dealt, starting with your latest
+game. Pick another game from the dropdown. A flagged hand carries its flag on the
+row, and every row has the same check box and pencil, so you can mark or write on
+any hand, flagged or not. **Played only** (on by default) leaves out the hands that
+were just a preflop fold. The Spot box still applies, so `vs=luis` lists only that
+session's hands against him. `GET /players/{alias}/games` lists a player's games,
+and `GET /players/{alias}/hands?game=<id>` lists the rows with their marks and notes.
+
+**Side by side** puts the list on the left and the replay on the right, where it
+stays in place while you scroll. It works in Hand review, Bad beats and Session. The
+↑ and ↓ keys step to the previous and next hand and replay it. The setting is kept
+in this browser. Below 900px wide, including the extension's side panel, the replay
+goes back under the list.
+
 ## All-in EV
 
 ```bash

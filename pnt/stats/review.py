@@ -604,17 +604,33 @@ def review_hand(hand: HandRow, facts: Mapping[str, Facts], pid: str, ctx: Contex
     return rows
 
 
-# ------------------------------------------------------------------ marks ---
+# --------------------------------------------------------- marks and notes ---
 #
-# A flag says a hand is worth a look; a mark says you have taken it. The two are
-# opposites in every way that matters here: a flag is derived at read time from
-# the cards and recomputed on every request, a mark is yours, entered by hand and
-# stored. See schema.sql for why it is keyed on (game_id, hand_number) rather
-# than on a hand_id that a rebuild moves.
+# A flag says a hand is worth a look; a mark says you have taken it, and a note
+# says what you found. All three are opposites of the flag in the way that
+# matters here: a flag is derived at read time from the cards and recomputed on
+# every request, a mark and a note are yours, entered by hand and stored. See
+# schema.sql for why they are keyed on (game_id, hand_number) rather than on a
+# hand_id that a rebuild moves.
 #
-# The mark is on the HAND, not on (hand, flag) or (hand, player). You reviewed a
+# Both are on the HAND, not on (hand, flag) or (hand, player). You reviewed a
 # hand or you did not; a hand that earns two flags, or shows up on two players'
-# reviews, is still the one replay you either watched or did not.
+# reviews, is still the one replay you either watched or did not, and the one
+# mistake you either wrote down or did not.
+#
+# Mark and note are independent: either can exist without the other. Clearing the
+# mark on a hand you want to come back to must not throw away what you typed
+# about it, and a note on a hand still to be reviewed is the ordinary case --
+# "check the turn sizing here" is written before the second look, not after.
+
+
+def _require_hand(conn: sqlite3.Connection, game_id: str, hand_number: int) -> None:
+    """Raise unless the database has that hand: a mark or a note is only useful
+    next to the replay it points at."""
+    if conn.execute(
+        "SELECT 1 FROM hands WHERE game_id = ? AND hand_number = ?", (game_id, hand_number)
+    ).fetchone() is None:
+        raise ValueError(f"no hand #{hand_number} in game {game_id}")
 
 
 def reviewed_marks(conn: sqlite3.Connection, game_id: str | None = None) -> dict[tuple[str, int], str]:
@@ -645,10 +661,8 @@ def mark_reviewed(
     only useful next to the replay it points at. Clearing does not check, so a
     mark left over from a game since deleted can still be swept up.
     """
-    if reviewed and conn.execute(
-        "SELECT 1 FROM hands WHERE game_id = ? AND hand_number = ?", (game_id, hand_number)
-    ).fetchone() is None:
-        raise ValueError(f"no hand #{hand_number} in game {game_id}")
+    if reviewed:
+        _require_hand(conn, game_id, hand_number)
     with writing(conn):
         if not reviewed:
             conn.execute(
@@ -665,6 +679,62 @@ def mark_reviewed(
         "SELECT reviewed_at FROM hand_reviews WHERE game_id = ? AND hand_number = ?",
         (game_id, hand_number),
     ).fetchone()[0]
+
+
+def hand_notes(conn: sqlite3.Connection, game_id: str | None = None) -> dict[tuple[str, int], dict]:
+    """(game_id, hand_number) -> {"note", "noted_at"}, for one game or all of them."""
+    sql = "SELECT game_id, hand_number, note, noted_at FROM hand_notes"
+    args: tuple = ()
+    if game_id is not None:
+        sql += " WHERE game_id = ?"
+        args = (game_id,)
+    return {
+        (r["game_id"], r["hand_number"]): {"note": r["note"], "noted_at": r["noted_at"]}
+        for r in conn.execute(sql, args)
+    }
+
+
+def note_of(conn: sqlite3.Connection, game_id: str, hand_number: int) -> dict | None:
+    """One hand's note as {"note", "noted_at"}, or None when it has none."""
+    row = conn.execute(
+        "SELECT note, noted_at FROM hand_notes WHERE game_id = ? AND hand_number = ?",
+        (game_id, hand_number),
+    ).fetchone()
+    return {"note": row["note"], "noted_at": row["noted_at"]} if row else None
+
+
+def set_note(
+    conn: sqlite3.Connection, game_id: str, hand_number: int, note: str | None
+) -> dict | None:
+    """Write what you found in one hand, or clear it. Returns the stored note, or None.
+
+    The text is stripped, and a note that strips to nothing clears the row: there
+    is no difference between an empty note and no note, so an emptied box is a
+    deletion rather than a blank line under the hand. Every write stamps
+    `noted_at` afresh -- the mark says when you first looked, a note says when you
+    last wrote it down.
+
+    Raises ValueError when noting a hand the database does not have, like
+    `mark_reviewed`. Clearing does not check, so a note left over from a game
+    since deleted can still be swept up.
+    """
+    text = (note or "").strip()
+    if text:
+        _require_hand(conn, game_id, hand_number)
+    with writing(conn):
+        if not text:
+            conn.execute(
+                "DELETE FROM hand_notes WHERE game_id = ? AND hand_number = ?",
+                (game_id, hand_number),
+            )
+            return None
+        conn.execute(
+            "INSERT INTO hand_notes (game_id, hand_number, note, noted_at) VALUES (?, ?, ?, ?)"
+            " ON CONFLICT(game_id, hand_number) DO UPDATE SET note = excluded.note,"
+            " noted_at = excluded.noted_at",
+            (game_id, hand_number, text, datetime.now(UTC).isoformat(timespec="seconds")),
+        )
+    return note_of(conn, game_id, hand_number)
 
 
 # ------------------------------------------------------------------- read ---
@@ -741,13 +811,14 @@ def review_hand_list(
     """One player's flagged hands, newest first, with the population they came from.
 
     Rows carry every field of `queries.hand_list` so the page renders them with
-    the same code, plus the flag and whether the hand has been marked reviewed.
-    Raises ValueError on an unknown alias.
+    the same code, plus the flag, whether the hand has been marked reviewed, and
+    whatever you wrote down about it. Raises ValueError on an unknown alias.
     """
     rows, stack_unknown, facts_by_hand, hands = review_rows(conn, alias, game_id)
     ids = set(identities_of(conn, alias))
     names = display_names(conn)
     marks = reviewed_marks(conn, game_id)
+    notes = hand_notes(conn, game_id)
 
     def keep(f: Facts) -> bool:
         return predicate is None or predicate(f)
@@ -773,11 +844,14 @@ def review_hand_list(
         counts[r.kind] += 1
         hand = hands[r.hand_id]
         board = board_at(hand.board, r.street) or hand.board
+        note = notes.get((hand.game_id, hand.hand_number)) or {}
         d = hand_list([f], names)[0]
         d.update(
             {
                 "reviewed": (hand.game_id, hand.hand_number) in marks,
                 "reviewed_at": marks.get((hand.game_id, hand.hand_number)),
+                "note": note.get("note"),
+                "noted_at": note.get("noted_at"),
                 "kind": r.kind,
                 "label": KIND_LABELS[r.kind],
                 "group": KINDS[r.kind],
@@ -819,10 +893,12 @@ def review_hand_list(
         "showdowns": len(showdowns),
         "known_showdowns": len(known),
         "counts": counts,
-        # Listed rows already marked. Counted over rows, not hands, so it can be
-        # read straight against the flag counts beside it: one hand carrying two
-        # flags is two rows on the page and two here.
+        # Listed rows already marked, and listed rows carrying a note. Counted
+        # over rows, not hands, so they can be read straight against the flag
+        # counts beside them: one hand carrying two flags is two rows on the page
+        # and two here.
         "reviewed": sum(1 for d in out if d["reviewed"]),
+        "noted": sum(1 for d in out if d["note"]),
         "skipped": skipped,
         "thresholds": {k: list(v) if isinstance(v, tuple) else v for k, v in THRESHOLDS.items()},
         "hands": out,

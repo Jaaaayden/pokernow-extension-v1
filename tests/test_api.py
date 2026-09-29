@@ -211,6 +211,8 @@ def test_chart_page_is_served(client):
     assert "hands-sort" in r.text, "the hand list can be ordered by pot size"
     assert 'data-view="review"' in r.text and 'data-view="beats"' in r.text
     assert "/review" in r.text and "review-sort" in r.text, "the review views order by recency and pot"
+    assert 'data-view="session"' in r.text and "session-game" in r.text and "/games" in r.text
+    assert "review-split" in r.text, "the list views can put the replay beside the list"
 
 
 def test_sizing_endpoint(client):
@@ -426,3 +428,69 @@ def test_marking_a_hand_reviewed_round_trips_and_reaches_the_review(client):
 
 def test_marking_an_unknown_hand_is_a_404(client):
     assert client.post("/hands/999999/reviewed", json={"reviewed": True}).status_code == 404
+
+
+def test_noting_a_hand_round_trips_and_reaches_the_review(client):
+    """Same keying as the mark, and independent of it: a note written on a hand
+    that is not marked stays put when the mark is set and cleared again."""
+    listed = client.get("/players/genericpoker/review").json()
+    flagged = listed["hands"][0]
+    assert listed["noted"] == 0 and flagged["note"] is None
+
+    out = client.post(f"/hands/{flagged['hand_id']}/note", json={"note": " raise the flop "}).json()
+    assert out["note"] == "raise the flop" and out["noted_at"]
+    assert (out["game_id"], out["hand_number"]) == (flagged["game_id"], flagged["hand_number"])
+    assert client.get("/notes").json() == [
+        {"game_id": out["game_id"], "hand_number": out["hand_number"],
+         "note": out["note"], "noted_at": out["noted_at"]}
+    ]
+    assert client.get("/notes", params={"game": "nosuchgame"}).json() == []
+
+    again = client.get("/players/genericpoker/review").json()
+    same_hand = lambda h: (h["game_id"], h["hand_number"]) == (out["game_id"], out["hand_number"])
+    assert again["noted"] == sum(1 for h in again["hands"] if same_hand(h)) >= 1
+    for h in again["hands"]:
+        assert (h["note"] == out["note"]) == same_hand(h)
+
+    # The mark comes and goes; the note does not go with it.
+    client.post(f"/hands/{flagged['hand_id']}/reviewed", json={"reviewed": True})
+    client.post(f"/hands/{flagged['hand_id']}/reviewed", json={"reviewed": False})
+    assert client.get("/notes").json()[0]["note"] == out["note"]
+
+    cleared = client.post(f"/hands/{flagged['hand_id']}/note", json={"note": "  "}).json()
+    assert cleared["note"] is None and cleared["noted_at"] is None
+    assert client.get("/notes").json() == []
+
+
+def test_noting_an_unknown_hand_is_a_404(client):
+    assert client.post("/hands/999999/note", json={"note": "x"}).status_code == 404
+
+
+def test_games_endpoint_lists_a_players_sessions_newest_first(client):
+    games = client.get("/players/genericpoker/games").json()
+    assert games, "genericpoker played in the fixture logs"
+    last = [g["last_ts"] for g in games]
+    assert last == sorted(last, reverse=True)
+    every = client.get("/players/genericpoker/hands").json()["hands"]
+    # A seat per hand, so a hand counts once however many IDs the alias merges.
+    assert sum(g["hands"] for g in games) == len({h["hand_id"] for h in every})
+    assert client.get("/players/ghost/games").status_code == 404
+
+
+def test_session_hands_carry_play_marks_and_notes(client):
+    game = client.get("/players/genericpoker/games").json()[0]["game_id"]
+    rows = client.get("/players/genericpoker/hands", params={"game": game}).json()["hands"]
+    assert rows and all(r["game_id"] == game for r in rows)
+    for r in rows:
+        assert {"vpip", "saw_flop", "reviewed", "reviewed_at", "note", "noted_at"} <= set(r)
+        assert not r["reviewed"] and r["note"] is None
+    assert any(r["vpip"] for r in rows) and not all(r["vpip"] for r in rows)
+
+    # Any hand can be marked and written on, flagged or not, and the row says so.
+    hand = rows[0]
+    client.post(f"/hands/{hand['hand_id']}/reviewed", json={"reviewed": True})
+    client.post(f"/hands/{hand['hand_id']}/note", json={"note": "fold the river"})
+    again = client.get("/players/genericpoker/hands", params={"game": game}).json()["hands"]
+    mine = next(r for r in again if r["hand_id"] == hand["hand_id"])
+    assert mine["reviewed"] and mine["reviewed_at"] and mine["note"] == "fold the river"
+    assert sum(r["reviewed"] for r in again) == 1

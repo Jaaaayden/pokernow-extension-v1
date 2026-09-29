@@ -442,6 +442,10 @@ def hand_list(facts: Iterable[Facts], names: Mapping[str, str] | None = None) ->
                 "pot": f.pot,
                 "bb": f.bb_size,
                 "wtsd": f.wtsd,
+                # Whether they played the hand at all: the session view hides the
+                # hands that were only a preflop fold.
+                "vpip": f.vpip,
+                "saw_flop": f.saw_flop,
                 "bet_size": dict(f.bet_size),
                 # Who the hand was against, and whether they closed the action.
                 # `position` above is the absolute seat and stays in the payload;
@@ -455,6 +459,30 @@ def hand_list(facts: Iterable[Facts], names: Mapping[str, str] | None = None) ->
             }
         )
     return rows
+
+
+def player_games(conn: sqlite3.Connection, alias: str) -> list[dict]:
+    """Every game one player was dealt into, newest first: the sessions to pick from.
+
+    A plain join, like the players page's hand counts -- nothing here needs a
+    derived statistic. Raises ValueError on an unknown alias.
+    """
+    ids = identities_of(conn, alias)
+    if not ids:
+        return []
+    q = ",".join("?" * len(ids))
+    return [
+        dict(r)
+        for r in conn.execute(
+            "SELECT h.game_id, g.started_at, MIN(h.ts) AS first_ts, MAX(h.ts) AS last_ts,"
+            " COUNT(DISTINCT h.hand_id) AS hands, g.sb, g.bb"
+            " FROM hands h JOIN hand_players hp ON hp.hand_id = h.hand_id"
+            " LEFT JOIN games g ON g.game_id = h.game_id"
+            f" WHERE hp.pn_id IN ({q})"
+            " GROUP BY h.game_id ORDER BY MAX(h.ord) DESC",
+            ids,
+        )
+    ]
 
 
 def positional_report(conn: sqlite3.Connection, alias: str, pool: bool = True) -> list[dict]:

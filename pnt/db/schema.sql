@@ -107,6 +107,23 @@ CREATE TABLE IF NOT EXISTS hand_reviews (
     PRIMARY KEY (game_id, hand_number)
 ) WITHOUT ROWID;
 
+-- What you wrote down about a hand: the mistake you found, the read you want to
+-- remember. Everything said above about a mark applies to a note -- same key,
+-- same reason, never thrown away -- and it is a table of its own rather than a
+-- column on hand_reviews so that the two can be set and cleared independently:
+-- un-ticking a hand you meant to look at again must not silently delete what you
+-- typed, and a note is worth keeping on a hand you have not finished with.
+--
+-- `noted_at` is when the note was LAST written, unlike `reviewed_at`, which is
+-- when the hand was first marked: a mark is an event, a note is a document.
+CREATE TABLE IF NOT EXISTS hand_notes (
+    game_id     TEXT NOT NULL,
+    hand_number INTEGER NOT NULL,
+    note        TEXT NOT NULL,
+    noted_at    TEXT NOT NULL,
+    PRIMARY KEY (game_id, hand_number)
+) WITHOUT ROWID;
+
 -- ---------------------------------------------------------------- layer 2 ----
 
 CREATE TABLE IF NOT EXISTS games (
