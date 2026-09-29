@@ -25,6 +25,10 @@
   <input id="server" placeholder="http://127.0.0.1:52000">
   <label for="poll">Poll every (seconds)</label>
   <input id="poll" type="number" min="2" max="60">
+  <label for="livemin" title="A live spot with fewer hands than this is widened to the closest one that has enough.">Min hands for a live spot</label>
+  <input id="livemin" type="number" min="1" max="1000">
+  <label for="liveknown" title="A live spot is narrowed to boards like this one (highest card, paired or not) only while at least this many shown hands survive it. 0 always narrows.">Min shown hands to narrow by board</label>
+  <input id="liveknown" type="number" min="0" max="1000">
   <div class="row"><button id="save">Save</button><span id="health"></span><a id="tracker" target="_blank" rel="noopener" href="#">tracker ↗</a></div>
   <div class="kv" id="status"></div>
 </main>

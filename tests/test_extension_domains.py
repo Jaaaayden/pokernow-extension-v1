@@ -64,7 +64,7 @@ def test_the_extension_ships_inside_the_package():
     """
     assert (EXTENSION_DIR / "manifest.json").is_file(), f"no manifest in {EXTENSION_DIR}"
     shipped = (
-        "background.js", "content.js", "normalize.js", "pager.js", "popup.html", "popup.js",
+        "background.js", "content.js", "normalize.js", "pager.js", "spot.js", "popup.html", "popup.js",
         "sidepanel.html", "sidepanel.js", "watch.js",
     )
     for name in shipped:
@@ -72,6 +72,7 @@ def test_the_extension_ships_inside_the_package():
     # Every script the content script relies on must be loaded ahead of it.
     manifest = json.loads((EXTENSION_DIR / "manifest.json").read_text(encoding="utf-8"))
     js = manifest["content_scripts"][0]["js"]
+    assert js.index("spot.js") < js.index("content.js")
     assert js.index("pager.js") < js.index("content.js")
     assert js.index("watch.js") < js.index("content.js")
 
@@ -87,3 +88,6 @@ def test_the_hud_opens_in_the_side_panel():
     path = manifest["side_panel"]["default_path"]
     assert (EXTENSION_DIR / path).is_file()
     assert "default_popup" not in manifest["action"]
+    # The panel uses spot.js's helpers, so it must be loaded first.
+    html = (EXTENSION_DIR / path).read_text(encoding="utf-8")
+    assert 0 <= html.index('src="spot.js"') < html.index('src="sidepanel.js"')

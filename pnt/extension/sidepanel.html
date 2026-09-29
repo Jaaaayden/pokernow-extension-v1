@@ -15,6 +15,8 @@
     align-items: center; gap: 2px 6px; padding: 5px 8px; border-bottom: 1px solid rgba(255,255,255,.1); }
   .head b { font-weight: 600; }
   .head .st { color: #c3c2b7; margin-left: auto; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; max-width: 60%; }
+  .head .live { flex-basis: 100%; order: 9; color: #c3c2b7; font-variant-numeric: tabular-nums; }
+  .head .live:empty { display: none; }
 
   .settings { border-bottom: 1px solid rgba(255,255,255,.1); }
   .settings iframe { display: block; width: 100%; height: 360px; border: 0; background: #1a1a19; }
@@ -24,20 +26,43 @@
   .empty { padding: 10px 8px; color: #c3c2b7; }
 
   /* One card per player. Everything the wide table put on one line is here in
-     two: who, and the numbers. Sized small so the
+     four: who and where, tags, the numbers, and the spot. Sized small so the
      panel can be dragged narrow and still fit a stats row of four. */
   .card { padding: 5px 8px; border-bottom: 1px solid rgba(255,255,255,.07); cursor: pointer; }
   .card:hover { background: rgba(255,255,255,.03); }
   .card.sel { background: rgba(57,135,229,.18); }
+  .card.out > * { opacity: .45; }
   .who { display: flex; align-items: baseline; gap: 6px; font-variant-numeric: tabular-nums; }
   .who .name { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .who .name small { color: #898781; font-weight: 400; margin-left: 3px; font-size: 10px; }
+  .who .pos { color: #c3c2b7; margin-left: auto; }
+  .who .stack { color: #fff; }
+  .card.act .name { color: #ffd166; }
+  .card.act .name::before { content: "▶ "; font-size: 8px; }
+
+  /* Tag chips: the archetype filled, exploits outlined, the fun ones dashed. All
+     of them, wrapping: the card has the height the table row did not. */
+  .tags { margin-top: 3px; display: flex; flex-wrap: wrap; gap: 2px; }
+  .tags:empty { display: none; }
+  .tag { font-size: 9px; line-height: 1.35; padding: 0 4px; border-radius: 7px;
+    border: 1px solid rgba(255,255,255,.35); color: #c3c2b7; cursor: pointer; font-weight: 500; letter-spacing: .01em; }
+  .tag:hover { color: #fff; border-color: #fff; }
+  .tag.kind-archetype { background: rgba(57,135,229,.35); border-color: transparent; color: #fff; }
+  .tag.kind-fun { border-style: dashed; color: #ffd166; }
+  .tag.streaky { opacity: .45; border-style: dotted; }
+  .tag.streaky:hover { opacity: 1; }
+
   .stats { margin-top: 3px; display: grid; grid-template-columns: repeat(auto-fill, minmax(62px, 1fr));
     gap: 1px 4px; font-variant-numeric: tabular-nums; }
   .stat { white-space: nowrap; }
   .stat .k { color: #898781; font-size: 9px; margin-right: 3px; }
   .stat .drift { color: #86b6ef; }
   .stat small.life { color: #898781; margin-left: 2px; font-size: 9px; }
+
+  .spot { margin-top: 3px; color: #c3c2b7; }
+  .spot .path { color: #898781; }
+  .spot:empty { display: none; }
+  .spot.pending { color: #fff; }
 
   /* The chart takes the panel's width; its height is dragged at the corner and remembered. */
   .chart { display: flex; flex-direction: column; border-top: 1px solid rgba(255,255,255,.1);
@@ -54,6 +79,7 @@
     <span class="st" id="st"></span>
     <button id="pause" title="pause capture" hidden>⏸</button>
     <button id="gear" title="settings" aria-pressed="false">⚙</button>
+    <span class="live" id="live"></span>
   </div>
   <div class="settings" id="settings" hidden><iframe id="settings-frame" title="settings"></iframe></div>
   <div class="empty" id="nogame">Open a PokerNow game tab — the tracker shows it here.</div>
@@ -65,12 +91,15 @@
     <div class="chart" id="chart" hidden>
       <div class="bar">
         <span id="who"></span>
+        <button id="pin" title="Pin the chart to this player: it stays on them, in the spot they are in, while the action moves round. Click again to go back to whoever is to act." aria-pressed="false">📌</button>
+        <button id="follow" title="Follow the live action: show the player to act, in the spot they are in. Clicking a card shows that player until the action moves; editing the spot in the chart switches this off.">follow</button>
         <a id="ext" target="_blank" rel="noopener">open ↗</a>
         <button id="close" title="close the chart">✕</button>
       </div>
       <iframe id="frame" title="range chart"></iframe>
     </div>
   </main>
+  <script src="spot.js"></script>
   <script src="sidepanel.js"></script>
 </body>
 </html>

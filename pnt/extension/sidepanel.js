@@ -1,13 +1,14 @@
 /* Side panel: the HUD, beside the PokerNow page rather than drawn over it.
  *
  * It captures nothing. The content script on the game tab reports its counters,
- * status text and the /hud payload to the background worker, which
+ * status text and the /hud and /live payloads to the background worker, which
  * keeps them in session storage under `status:<tabId>`. This page shows the
  * report for the active tab in its window and redraws whenever it changes, so a
  * panel opened mid-game fills in at once and switching tabs switches games.
  *
  * Each seat is a card rather than a table row: the panel is narrow. A card can
- * open that player's range chart, embedded from the local server underneath.
+ * open that player's range chart, embedded from the local server underneath;
+ * the chart follows the live action (spot.js decides whom and when).
  */
 (() => {
   "use strict";
@@ -28,9 +29,16 @@
     snap: null,         // the latest report from the tab on show
     game: null,
     rev: -1,            // the report's rev at the last redraw
-    hud: null,
+    hud: null, live: null,
+    acting: null,       // the name on the table's decision-current seat, ahead of /live
+    follow: true,       // the chart follows the live spot
+    sentSpots: [],      // the last few spots posted into the chart, to tell an echo from an edit
   };
-  let selected = null;
+  let selected = null, pinned = null;
+  let heldAt = null; // the moment a card was clicked at; see followSpot
+  // The data the panel is drawn from: a new /live or HUD report, or the action
+  // moving on the table before the log has caught up.
+  const moment = () => `${state.rev}|${state.acting ?? ""}`;
 
   // ------------------------------------------------------------- the tab --
   // The panel belongs to a window, not a tab: it shows whichever tab is active.
@@ -59,12 +67,14 @@
     $("main").hidden = !snap;
     $("pause").hidden = !snap;
     if (!snap) {
+      $("live").textContent = "";
       setStatus("");
       return;
     }
     // Another game in this tab, or another tab: nothing on show carries over.
     if (snap.game !== state.game) {
       state.game = snap.game;
+      state.sentSpots = [];
       state.rev = -1;
       closeChart();
     }
@@ -72,11 +82,16 @@
     $("pause").textContent = snap.paused ? "▶" : "⏸";
     $("pause").title = snap.paused ? "resume capture" : "pause capture";
     // Only new data redraws the cards: a redraw on every status tick would throw
-    // away the tooltip being read.
-    if (snap.rev !== state.rev) {
+    // away the tooltip being read. The table's player to act counts as new data --
+    // it arrives a poll or more before /live says the same.
+    const acting = snap.tableActing ?? null;
+    if (snap.rev !== state.rev || acting !== state.acting) {
       state.rev = snap.rev;
+      state.acting = acting;
       state.hud = snap.hudData ?? null;
+      state.live = snap.liveData ?? null;
       render();
+      followSpot();
     }
   }
 
@@ -101,12 +116,26 @@
 
   // ----------------------------------------------------------------- chart --
   $("close").addEventListener("click", closeChart);
+  $("follow").addEventListener("click", () => setFollow(!state.follow));
+  // The pin keeps the chart on one player while the action goes round; without
+  // it the chart goes to whoever is to act.
+  $("pin").addEventListener("click", () => {
+    pinned = pinned ? null : selected;
+    heldAt = null;
+    updateWho();
+    followSpot();
+  });
+
   // The chart page owns the spot, board and view controls -- it has chips for
   // all three, and a text box for filters no dropdown here could express. This
-  // bar only says who is on show and how to get out, so the two can never disagree.
-  function chartUrl(player, filter) {
+  // bar only says who is on show, whether the live action is being followed,
+  // and how to get out, so the two can never disagree.
+  // `view` is optional: {by, street, kind} when a tag chip wants the hands
+  // behind it shown as made hands or by size rather than on the preflop grid.
+  function chartUrl(player, filter, view) {
     const q = new URLSearchParams({ player, theme: "dark" });
     if (filter) q.set("filter", filter);
+    for (const k of ["by", "street", "kind"]) if (view?.[k]) q.set(k, view[k]);
     return `${state.server}/chart?${q}`;
   }
   const origin = () => new URL(state.server).origin;
@@ -126,33 +155,63 @@
   }
 
   function updateWho() {
-    $("who").textContent = selected || "";
+    $("who").textContent = !selected ? "" : pinned ? `pinned: ${selected}` : state.follow ? `following: ${selected}` : selected;
+    $("follow").setAttribute("aria-pressed", String(state.follow));
+    $("pin").setAttribute("aria-pressed", String(!!pinned));
+  }
+  function setFollow(on) {
+    state.follow = on;
+    try { localStorage.setItem("pnt-follow", on ? "1" : "0"); } catch {}
+    updateWho();
+    if (on) followSpot();
+  }
+  function remember(spot) {
+    state.sentSpots = [spot, ...state.sentSpots].slice(0, 5);
   }
   // Put `alias` on show in the chart, in `filter` (all their hands when empty).
   // An open chart is told over postMessage rather than reloaded, so nothing
   // flashes and the view and colour mode picked in there survive.
-  function selectPlayer(alias, filter) {
+  function selectPlayer(alias, filter, view) {
     selected = alias;
     chartHands = handsOf(alias);
     markSel();
     const spot = { player: alias, filter: filter || "" };
+    remember(spot);
     if (!isOpen()) {
-      const url = chartUrl(alias, filter);
+      const url = chartUrl(alias, filter, view);
       $("frame").src = url;
       $("ext").href = url;
       restoreChartHeight();
       $("chart").hidden = false;
     } else {
-      $("frame").contentWindow?.postMessage({ type: "pnt-spot", ...spot }, origin());
+      $("frame").contentWindow?.postMessage({ type: "pnt-spot", ...spot, ...(view || {}) }, origin());
     }
     updateWho();
+  }
+  // The live spot, into the chart, whenever it moves. spot.js says whether it
+  // did: a player with no data behind their spot is shown on all their hands.
+  // The table's player to act leads it: the chart moves to them as soon as the
+  // table shows it, and takes their spot once /live has caught up.
+  // A card just clicked holds until the data next moves, so the frame loading
+  // does not snatch it straight back to the player to act.
+  function followSpot() {
+    if (!state.follow || !isOpen()) return;
+    if (!pinned && heldAt === moment()) return;
+    heldAt = null;
+    const s = PNT.nextSpot(state.live, pinned, state.sentSpots[0], state.acting);
+    if (s) selectPlayer(s.player, s.filter);
   }
   function closeChart() {
     $("chart").hidden = true;
     selected = null;
+    pinned = null;
+    heldAt = null;
     markSel();
     updateWho();
   }
+  // Once the frame has loaded, the spot may already have moved on.
+  $("frame").addEventListener("load", followSpot);
+
   // The chart page reports its URL and current player whenever the spot, view,
   // colour or player changes inside the frame, so the link out keeps up with
   // what is on screen.
@@ -164,6 +223,10 @@
     if (e.origin !== origin()) return;
     if (!e.data || e.data.type !== "pnt-url") return;
     $("ext").href = e.data.url;
+    // A spot the HUD did not ask for is the user reaching into the chart --
+    // typing a filter, pressing a chip, picking a player. Following would snatch
+    // it away on the next action, so it stops here until switched back on.
+    if (state.follow && state.sentSpots.length && !PNT.isEcho(e.data.url, state.sentSpots)) setFollow(false);
     // The chart has a player dropdown of its own, over every player in the
     // database rather than only the ones seated here. Using it leaves the frame
     // showing someone other than the card that opened it, so follow it: otherwise
@@ -174,6 +237,7 @@
     const player = e.data.player ?? paramOf(e.data.url, "player");
     if (player && player !== selected) {
       selected = player;
+      if (pinned) pinned = player;
       markSel();
       chartHands = handsOf(player);
       updateWho();
@@ -224,8 +288,19 @@
   const DRIFT_POINTS = 10, DRIFT_MIN_OPP = 10;
   const sample = (st, k) => (k === "hands" ? null : st._opp?.[OPP_KEY[k]]);
 
-  // One card per seat, from the HUD payload, keyed by PokerNow ID.
-  const rows = () => state.hud?.seats ?? [];
+  // One card per seat. The live hand's roster when there is one -- it is the
+  // table as it is now -- else the last completed hand's. Stats come from the
+  // HUD payload by PokerNow ID; a player dealt in for the first time has none
+  // yet and still gets a card, named from the log.
+  function rows() {
+    const hud = new Map((state.hud?.seats ?? []).map((s) => [s.pn_id, s]));
+    const live = state.live?.players;
+    if (!live) return [...hud.values()].map((s) => ({ ...s, live: null }));
+    return live.map((p) => {
+      const s = hud.get(p.pn_id) || { pn_id: p.pn_id, alias: p.alias, stats: { hands: 0 }, session: hud.size ? { hands: 0 } : null, tags: null };
+      return { ...s, seat: p.seat, alias: s.alias || p.alias, name: p.name, live: p };
+    });
+  }
 
   const el = (tag, cls, text) => {
     const n = document.createElement(tag);
@@ -237,31 +312,66 @@
   function render() {
     const body = $("body");
     body.replaceChildren();
-    const seats = [...rows()].sort((a, b) => a.seat - b.seat);
+    const seats = rows().sort((a, b) => a.seat - b.seat);
+    const lv = state.live?.hand_number ? state.live : null;
+    $("live").textContent = lv
+      ? `hand #${lv.hand_number} · ${lv.street}${lv.pot ? ` · pot ${lv.pot}` : ""}${lv.board?.length ? ` · ${lv.board.join(" ")}` : ""}`
+      : "";
     // An older server sends lifetime only; the cards then print just that.
     const hasSession = seats.some((s) => s.session);
     $("legend").hidden = !hasSession;
     if (!seats.length) {
-      body.append(el("div", "empty", state.hud ? "no one dealt in yet" : "waiting for the first hand…"));
+      body.append(el("div", "empty", state.hud || state.live ? "no one dealt in yet" : "waiting for the first hand…"));
       return;
     }
-    for (const s of seats) body.appendChild(card(s));
+    for (const s of seats) body.appendChild(card(s, lv));
     markSel();
     refreshChart();
   }
 
-  function card(s) {
+  function card(s, lv) {
     const st = s.stats || {};
     const c = el("div", "card");
     c.dataset.alias = s.alias || "";
     c.title = `seat ${s.seat} · ${s.pn_id}`;
+    if (s.live) {
+      if (lv && PNT.actingId(lv, state.acting) === s.pn_id) c.classList.add("act");
+      if (s.live.folded) c.classList.add("out");
+    }
 
-    // Who.
+    // Who and where.
     const who = el("div", "who");
     const name = el("span", "name", s.alias || s.name || s.pn_id);
     name.appendChild(el("small", null, `#${s.seat}`));
     who.appendChild(name);
+    if (s.live) {
+      const pos = el("span", "pos", s.live.position || "");
+      pos.title = "Position this hand. Blank when the button or a blind is dead.";
+      const stack = el("span", "stack", fmt(s.live.stack));
+      stack.title = s.live.committed ? `${s.live.committed} in the pot this hand` : "Chips behind, after what they have put in this hand.";
+      who.append(pos, stack);
+    }
     c.appendChild(who);
+
+    // Tag chips, every one: they wrap onto as many lines as they need. A chip
+    // opens the hands behind the tag: that pins the player and switches follow
+    // off, since the live action would otherwise replace the spot on the next report.
+    // Streaky tags -- ones a single session carries -- come last, dimmed.
+    const tags = el("div", "tags");
+    const { shown } = PNT.tagChips(s.tags?.tags, Infinity);
+    for (const tag of [...shown, ...(s.tags?.streaky || [])]) {
+      const chip = el("span", `tag kind-${tag.kind}${tag.carried_by ? " streaky" : ""}`, tag.label);
+      chip.title = PNT.tagTitle(tag);
+      chip.addEventListener("click", (e) => {
+        e.stopPropagation();
+        if (!s.alias) return;
+        pinned = s.alias;
+        setFollow(false);
+        selectPlayer(s.alias, tag.filter, { by: tag.by, street: tag.street, kind: tag.bet_kind });
+      });
+      tags.appendChild(chip);
+    }
+    c.appendChild(tags);
 
     // The numbers: this session, then lifetime in grey.
     const stats = el("div", "stats");
@@ -289,17 +399,39 @@
     }
     c.appendChild(stats);
 
-    // Clicking a card shows that player in the chart, on all their hands. A player
-    // without an identity yet has no chart to open.
+    // One line: what they have done this hand so far, in grey, then where they
+    // are now and how they have played that spot before. A folded player's
+    // line is only the path, which ends in the fold.
+    if (s.live) {
+      const path = PNT.pathText(s.live);
+      const now = PNT.spotText(s.live);
+      const spot = el("div", "spot");
+      if (path.text) spot.appendChild(el("span", "path", s.live.folded ? path.text : `${path.text} › `));
+      if (!s.live.folded || !path.text) spot.append(now.text);
+      spot.title = [path.title, now.title].filter(Boolean).join("\n\n");
+      if (s.live.node && !s.live.node.decision && !s.live.folded) spot.classList.add("pending");
+      c.appendChild(spot);
+    }
+
+    // Clicking a card shows that player in the chart. Following goes on: the
+    // chart stays on them only until the action next moves, then goes back to
+    // whoever is to act. With a pin in, the pin moves to them instead -- the 📌
+    // in the chart bar is what pins and unpins. A player without an identity
+    // yet has no chart to open.
     c.addEventListener("click", () => {
       if (!s.alias) return;
-      selectPlayer(s.alias, "");
+      heldAt = moment();
+      if (pinned) pinned = s.alias;
+      const spot = state.follow && s.live?.resolved ? s.live.resolved.filter : "";
+      selectPlayer(s.alias, spot);
     });
     return c;
   }
 
   // ----------------------------------------------------------------- start --
   (async () => {
+    try { state.follow = localStorage.getItem("pnt-follow") !== "0"; } catch {}
+    updateWho();
     const s = await send({ type: "settings" });
     if (s.ok) state.server = s.data.server;
     await track();

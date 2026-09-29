@@ -5,12 +5,16 @@
   const s = (await send({ type: "settings" })).data;
   $("server").value = s.server;
   $("poll").value = s.pollSeconds;
+  $("livemin").value = s.liveMin ?? 1;
+  $("liveknown").value = s.liveKnown ?? 5;
   $("tracker").href = s.server + "/";
 
   $("save").addEventListener("click", async () => {
     await chrome.storage.sync.set({
       server: $("server").value.trim().replace(/\/+$/, "") || "http://127.0.0.1:52000",
       pollSeconds: Math.max(2, Number($("poll").value) || 5),
+      liveMin: Math.max(1, Number($("livemin").value) || 1),
+      liveKnown: $("liveknown").value === "" ? 5 : Math.max(0, Math.trunc(Number($("liveknown").value)) || 0),
     });
     $("tracker").href = $("server").value.trim().replace(/\/+$/, "") + "/";
     health();
@@ -37,6 +41,7 @@
     put("history", st.history ? `${st.history}${st.pages ? ` · ${st.pages} pages` : ""}` : "–");
     put("last poll", st.lastPoll ? new Date(st.lastPoll).toLocaleTimeString() : "–");
     put("seated", String(st.seats));
+    if (st.live) put("live", st.live);
     put("log shape", st.envelopeOk == null ? "not seen yet" : st.envelopeOk
       ? `ok (${st.shape.list}/${st.shape.entry}/${st.shape.at}/${st.shape.order || "synth"})`
       : "UNRECOGNIZED – see page console");

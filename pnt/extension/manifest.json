@@ -14,7 +14,7 @@
         "https://www.pokernow.club/games/*",
         "https://pokernow.club/games/*"
       ],
-      "js": ["normalize.js", "pager.js", "watch.js", "content.js"],
+      "js": ["normalize.js", "pager.js", "spot.js", "watch.js", "content.js"],
       "run_at": "document_idle"
     }
   ],

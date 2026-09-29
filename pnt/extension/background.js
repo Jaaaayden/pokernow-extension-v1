@@ -5,7 +5,16 @@
  * page needs goes through one message: {type, ...} -> {ok, ...}.
  */
 
-const DEFAULTS = { server: "http://127.0.0.1:52000", pollSeconds: 5 };
+// `liveMin`: hands a spot needs before the live view shows it, else it widens.
+// `liveKnown`: shown hands a spot narrowed to the board's texture must keep.
+const DEFAULTS = { server: "http://127.0.0.1:52000", pollSeconds: 5, liveMin: 1, liveKnown: 5 };
+
+// A saved number, or the default when nothing sensible was saved. Zero is a
+// choice here (no texture gate), so `|| fallback` would be wrong.
+function count(v, fallback, floor) {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.max(floor, Math.trunc(n)) : fallback;
+}
 
 // The default port moved off 8000, which is the busiest port on a dev machine.
 // Anyone whose saved value is exactly an old default was accepting that default
@@ -47,8 +56,12 @@ const handlers = {
 
   hud: ({ game_id }) => call(`/hud/${encodeURIComponent(game_id)}`),
 
-  // The content script reports here -- counters, status text, and the HUD
-  // payload -- and the side panel and settings page read it back.
+  // The hand in progress, read from the raw lines: needs no rebuild.
+  live: ({ game_id, min, known }) =>
+    call(`/live/${encodeURIComponent(game_id)}?min=${count(min, 1, 1)}&known=${count(known, DEFAULTS.liveKnown, 0)}`),
+
+  // The content script reports here -- counters, status text, and the HUD and
+  // live payloads -- and the side panel and settings page read it back.
   status: async (msg, sender) => {
     const key = `status:${sender.tab?.id ?? "?"}`;
     await chrome.storage.session.set({ [key]: { ...msg.status, tabId: sender.tab?.id, at: Date.now() } });

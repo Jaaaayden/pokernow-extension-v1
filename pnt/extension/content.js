@@ -10,10 +10,13 @@
  * HUD: after new entries land, ask /hud/{game} for the current roster and
  * lifetime stats, keyed by PokerNow ID (never by seat -- seats are reused).
  *
- * A rebuild, which re-derives the whole game, waits for the hand to end.
+ * Live: every poll that brings lines also asks /live/{game} for the hand in
+ * progress -- who is to act, the spot each player is in, and the closest spot in
+ * their history with hands behind it. A rebuild, which re-derives the whole
+ * game, waits for the hand to end: the live view needs none.
  *
- * The HUD goes out in the status report, which the background worker keeps per tab.
- * The side panel (sidepanel.js) draws it beside the page rather than over it,
+ * Both go out in the status report, which the background worker keeps per tab.
+ * The side panel (sidepanel.js) draws them beside the page rather than over it,
  * and sends back the one thing it needs from here: pause and resume.
  */
 (() => {
@@ -38,12 +41,15 @@
   const state = {
     server: "http://127.0.0.1:52000",
     pollSeconds: 5,
+    liveMin: 1,
+    liveKnown: 5,
     sync: { cursor: 0, walk: null }, // see pager.js
     offered: 0, inserted: 0, polls: 0, errors: 0, pages: 0,
     lastError: null, lastPoll: null, shape: null, envelopeOk: null,
     hud: null, hudAt: 0, paused: false,
+    live: null, liveInserted: -1,
     statusText: "starting…",
-    rev: 0,             // bumped whenever the hud changes, so the panel redraws only then
+    rev: 0,             // bumped whenever hud or live changes, so the panel redraws only then
     backoffMs: 0,
     rebuiltAt: 0,       // `inserted` at the last rebuild
     rebuiltTime: 0,
@@ -51,6 +57,7 @@
     running: false, pollStartedAt: 0,
     poked: 0,           // why the next poll runs: 1 the table changed, n > 1 the nth look for its log line
     pokedWhileRunning: false,
+    tableActing: null,  // the name on the table's decision-current seat (watch.js)
   };
 
   const send = (msg) => new Promise((resolve) => {
@@ -70,7 +77,9 @@
       shape: state.shape, envelopeOk: state.envelopeOk, pages: state.pages,
       history: state.sync.walk ? "loading" : state.sync.cursor ? "complete" : "not loaded",
       seats: state.hud ? state.hud.seats.length : 0, paused: state.paused,
-      text: state.statusText, rev: state.rev, hudData: state.hud,
+      live: state.live ? (state.live.hand_number ? `hand #${state.live.hand_number} · ${state.live.street}` : "between hands") : null,
+      text: state.statusText, rev: state.rev, hudData: state.hud, liveData: state.live,
+      tableActing: state.tableActing,
     },
   });
 
@@ -78,15 +87,11 @@
     state.statusText = text;
     report();
   }
-  // New HUD data: the panel redraws its cards on the next report.
+  // New HUD or live data: the panel redraws its cards on the next report.
   function changed() {
     state.rev += 1;
     setStatus(state.paused ? "paused" : `capturing · ${state.inserted} new`);
   }
-
-  const END_LINE = /^-- ending hand #\d+ --$/;
-  /** True when any of these log entries closes a hand. */
-  const handEnded = (entries) => (entries || []).some((e) => END_LINE.test(e.entry || ""));
 
   // ---------------------------------------------------------------- capture --
   async function fetchPage({ after, before }) {
@@ -121,7 +126,7 @@
       if (!res.ok) throw new Error(res.error);
       state.offered += res.data.offered;
       state.inserted += res.data.new;
-      if (res.data.new && handEnded(entries)) state.endedSince = true;
+      if (res.data.new && PNT.handEnded(entries)) state.endedSince = true;
       return res.data;
     },
     pause: () => new Promise((resolve) => setTimeout(resolve, PAGE_PAUSE_MS)),
@@ -130,7 +135,7 @@
   // Re-derive the game when a hand has ended since the last time, when forced (a
   // history-walk checkpoint), or when lines have been arriving for a minute with
   // no end line seen. Mid-hand lines alone never trigger one: the derived tables
-  // would not change.
+  // would not change, and the live view reads the raw lines directly.
   async function rebuildIfDue(force = false) {
     if (state.inserted === state.rebuiltAt) return false;
     const stale = Date.now() - state.rebuiltTime > REBUILD_STALE_MS;
@@ -163,7 +168,13 @@
           report();
         },
       });
-      await rebuildIfDue();
+      // The live hand is only worth reading once the walk has reached the present
+      // and something has changed since it was last read. It goes first: the
+      // panel follows it, and a rebuild, the HUD and the cold stats a rebuild
+      // leaves behind can take a second between them.
+      if (!state.sync.walk && state.inserted !== state.liveInserted) await refreshLive();
+      // A rebuild may have given a new player an identity to resolve against.
+      if (await rebuildIfDue() && !state.sync.walk) await refreshLive();
       if (Date.now() - state.hudAt > HUD_EVERY_MS) await refreshHud();
       state.lastPoll = Date.now();
       state.lastError = null;
@@ -218,6 +229,10 @@
     let last = null, settle = null;
     const check = () => {
       settle = null;
+      // Who is to act goes to the panel now, not after the log: the chart can
+      // move to them while the poll is still out, backing off, or walking history.
+      const acting = PNT.tableActing(document);
+      if (acting !== state.tableActing) { state.tableActing = acting; report(); }
       const sig = PNT.tableSignature(document);
       if (sig === last) return;
       const first = last === null;
@@ -239,6 +254,20 @@
     changed();
   }
 
+  // Zero is a real setting here (no texture gate), so it is not a missing value.
+  function knownSetting(v) {
+    const n = Number(v);
+    return Number.isFinite(n) && v !== null && v !== "" ? Math.max(0, Math.trunc(n)) : 5;
+  }
+
+  async function refreshLive() {
+    const r = await send({ type: "live", game_id: GAME, min: state.liveMin, known: state.liveKnown });
+    if (!r.ok) { setStatus(r.error); return; }
+    state.live = r.data;
+    state.liveInserted = state.inserted;
+    changed();
+  }
+
   // The side panel's pause button. Answered with the new state, which also goes
   // out in the report so every panel showing this tab agrees.
   chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -255,6 +284,8 @@
     if (s.ok) {
       state.server = s.data.server;
       state.pollSeconds = Number(s.data.pollSeconds) || 5;
+      state.liveMin = Math.max(1, Number(s.data.liveMin) || 1);
+      state.liveKnown = knownSetting(s.data.liveKnown);
     }
     const h = await send({ type: "health" });
     setStatus(h.ok ? `connected · ${h.data.hands} hands in db` : `tracker not reachable at ${state.server}`);
@@ -262,6 +293,14 @@
       if (area !== "sync") return;
       if (changes.server) state.server = changes.server.newValue.replace(/\/+$/, "");
       if (changes.pollSeconds) state.pollSeconds = Number(changes.pollSeconds.newValue) || 5;
+      if (changes.liveMin) {
+        state.liveMin = Math.max(1, Number(changes.liveMin.newValue) || 1);
+        state.liveInserted = -1; // re-read the live hand at the new threshold
+      }
+      if (changes.liveKnown) {
+        state.liveKnown = knownSetting(changes.liveKnown.newValue);
+        state.liveInserted = -1;
+      }
     });
     loop();
     watchTable();

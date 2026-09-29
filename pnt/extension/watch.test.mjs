@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
-const { tableSignature, pokeDelay } = require("./watch.js");
+const { tableSignature, tableActing, pokeDelay } = require("./watch.js");
 
 // Just enough of a DOM for querySelector(All) over the selectors watch.js reads.
 const node = (className, text = "", kids = {}) => ({
@@ -15,6 +15,7 @@ function table({ pot = "0 total 30", board = [], dealer = 3, seats = [], clock =
   const players = seats.map((s, i) => node(`table-player table-player-${i + 1} ${s.cls || ""}`, "", {
     ".table-player-bet-value": node("table-player-bet-value", s.bet ?? ""),
     ".table-player-stack": node("table-player-stack", s.stack ?? "1000"),
+    ".table-player-name": node("table-player-name", s.name ?? `p${i + 1}`),
   }));
   const kids = {
     ".table-pot-size": node("table-pot-size", pot),
@@ -50,6 +51,14 @@ test("a new street and a new hand each change it", () => {
 test("a page with no table yet still signs", () => {
   const empty = { querySelector: () => null, querySelectorAll: () => [] };
   assert.equal(typeof tableSignature(empty), "string");
+});
+
+test("the table names the player to act, and only when it is one seat", () => {
+  assert.equal(tableActing(table({ seats: [{ cls: "you-player", name: "test" }, { cls: "decision-current", name: " 2000 " }] })), "2000");
+  assert.equal(tableActing(table({ seats: [{}, {}] })), null, "between streets no one is to act");
+  assert.equal(tableActing(table({ seats: [{ cls: "decision-current" }, { cls: "decision-current" }] })), null);
+  assert.equal(tableActing(table({ seats: [{ cls: "decision-current-x" }] })), null, "a class that only starts the same");
+  assert.equal(tableActing({ querySelector: () => null, querySelectorAll: () => [] }), null);
 });
 
 test("table-triggered polls start at least a second apart", () => {

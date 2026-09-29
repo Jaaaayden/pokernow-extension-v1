@@ -1762,10 +1762,14 @@
   // player on show has played new hands. Only the data is fetched again: the spot,
   // view and colour mode stay exactly as they are, and nothing flashes while it loads.
   //
-  // It posts {type: "pnt-spot", player, filter} when a card is clicked: that
-  // player, in that spot. That goes through the same path as typing the spot and
-  // pressing apply -- the box, the chips and the URL all follow, and `writeUrl`
-  // reports the result back up. The view and colour mode are left alone.
+  // It posts {type: "pnt-spot", player, filter} as the live hand moves: the spot
+  // the action is on, for the player it is on. That goes through the same path
+  // as typing the spot and pressing apply -- the box, the chips and the URL all
+  // follow, and `writeUrl` reports the result back up so the HUD can tell its own
+  // spot from one the user typed. The view and colour mode are left alone unless
+  // the message names a view (a tag chip opens the hands behind it in the view
+  // that shows them, made hands or sizing): a made-hand view stays a made-hand
+  // view as the hand moves.
   addEventListener("message", (e) => {
     if (!e.data) return;
     if (e.data.type === "pnt-refresh") load({ quiet: true });
@@ -1775,6 +1779,12 @@
       $("filter").value = e.data.filter || "";
       state.player = $("player").value;
       state.filter = $("filter").value.trim();
+      if (VIEWS.includes(e.data.by)) {
+        state.by = e.data.by;
+        document.querySelectorAll("[data-view]").forEach(x => x.setAttribute("aria-pressed", x.dataset.view === state.by));
+      }
+      if (["flop", "turn", "river"].includes(e.data.street)) { state.street = e.data.street; $("street").value = state.street; }
+      if (["cbet", "bet", "faced_cbet"].includes(e.data.kind)) { state.kind = e.data.kind; $("kind").value = state.kind; }
       syncChips();
       closeHands();
       writeUrl();

@@ -18,6 +18,11 @@
  * Left out on purpose: `.time-to-talk .normal-time`, the shot clock, rewrites
  * its inline width many times a second. The observer in content.js only listens
  * for class and text changes, and the signature does not read it either.
+ *
+ * The table also says who is to act, before the log does: `tableActing` reads the
+ * name on the `decision-current` seat, which the side panel follows at once and
+ * then checks against /live once the log has caught up. Still only a doorbell --
+ * the name moves the chart, never a line into the tracker.
  */
 (function (root) {
   "use strict";
@@ -35,13 +40,22 @@
     ].join("\n");
   }
 
+  /** The name on the seat the action is on, as the table shows it; null when no
+   * seat, or more than one, has `decision-current`. */
+  function tableActing(doc) {
+    const seats = [...doc.querySelectorAll(".seats .table-player")]
+      .filter((p) => ` ${p.className} `.includes(" decision-current "));
+    if (seats.length !== 1) return null;
+    return (seats[0].querySelector(".table-player-name")?.textContent || "").trim() || null;
+  }
+
   /** How long a poll the table asked for must wait so that polls start at least
    * `floorMs` apart. PokerNow answers a burst of /log requests with HTTP 429. */
   function pokeDelay(now, lastPollAt, floorMs = 1000) {
     return Math.max(0, (lastPollAt || 0) + floorMs - now);
   }
 
-  const api = { tableSignature, pokeDelay };
+  const api = { tableSignature, tableActing, pokeDelay };
   if (typeof module !== "undefined" && module.exports) module.exports = api;
   root.PNT = Object.assign(root.PNT || {}, api);
 })(typeof globalThis !== "undefined" ? globalThis : this);
