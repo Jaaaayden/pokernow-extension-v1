@@ -43,6 +43,7 @@ from .stats.review import (
     reviewed_marks,
     set_note,
 )
+from .stats.tags import tags_for
 
 app = typer.Typer(add_completion=False, help=__doc__)
 alias_app = typer.Typer(help="Manage player identities.")
@@ -952,6 +953,60 @@ def sizing(
         typer.echo(line)
         if b["classes"]:
             _print_composition(b)
+        typer.echo("")
+
+
+@app.command()
+def tags(
+    alias: str = typer.Argument(None, help="One player; every player when omitted."),
+    db: Path = DbOpt,
+    filter_: str = typer.Option(None, "--filter", help="Judge the tags inside a spot, e.g. 'players>=4'"),
+    game: str = typer.Option(None, "--game", help="Restrict to one game_id."),
+    min_hands: int = typer.Option(1, "--min-hands"),
+    as_json: bool = typer.Option(False, "--json"),
+) -> None:
+    """Archetype and exploit tags per player, with the count behind each one.
+
+    Every tag names the spot filter that puts its hands on the chart. Tags built
+    from shown hands say so: cards are known at showdown, so the bluffs that got
+    through are the hands missing from that evidence.
+    """
+    conn = connect(db)
+    try:
+        pred = parse_filter(filter_, display_names(conn)) if filter_ else None
+        if alias:
+            players = [(alias, facts_for(conn, alias, game))]
+        else:
+            grouped, aliases, _ = facts_by_player(conn, game)
+            players = sorted(
+                ((aliases[pid], facts) for pid, facts in grouped.items()), key=lambda p: -len(p[1])
+            )
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+    rows = []
+    for name, facts in players:
+        if pred is not None:
+            facts = [f for f in facts if pred(f)]
+        if len(facts) < min_hands:
+            continue
+        rows.append({"player": name, "filter": filter_, **tags_for(facts)})
+    if as_json:
+        typer.echo(json.dumps(rows if not alias else rows[0], indent=2))
+        return
+    for row in rows:
+        arch = row["archetype"]
+        p = row["profile"]
+        typer.echo(f"{row['player']}  {arch['label'] if arch else '(too few hands for an archetype)'}  {p['hands']} hands")
+        for t in row["tags"]:
+            if t["kind"] == "archetype":
+                continue
+            typer.echo(f"  {t['label']:<20} {_fmt(t['pct']):>5}% of {t['n']:<5} {t['tip']}")
+        for t in row["streaky"]:
+            c = t["carried_by"]
+            typer.echo(
+                f"  ({t['label']})".ljust(22) + f" {_fmt(t['pct']):>5}% of {t['n']:<5} one session only: "
+                f"gone without the {c['hands']}-hand game {c['game_id']} ({c['sessions']} sessions in all)"
+            )
         typer.echo("")
 
 

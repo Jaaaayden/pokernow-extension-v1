@@ -44,6 +44,7 @@ from pnt.stats.pots import DEFAULT_DAYS, DEFAULT_LIMIT, DEFAULT_MIN_POT, big_pot
 from pnt.stats.queries import (
     aggregate,
     display_names,
+    facts_cached,
     facts_for,
     hand_list,
     player_games,
@@ -52,6 +53,7 @@ from pnt.stats.queries import (
 )
 from pnt.stats.ranges import composition, range_grid, sizing_tells
 from pnt.stats.review import hand_notes, mark_reviewed, review_hand_list, reviewed_marks, set_note
+from pnt.stats.tags import tags_for
 
 DB_PATH = Path(os.environ.get("PNT_DB", "pokernow.sqlite"))
 STATIC = Path(__file__).parent / "static"
@@ -570,6 +572,20 @@ def player_game_list(alias: str) -> list[dict]:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@app.get("/players/{alias}/tags")
+def player_tags(
+    alias: str,
+    filter: Annotated[str | None, Query(description="e.g. 'players>=4'")] = None,
+    game: str | None = None,
+) -> dict:
+    """One player's archetype and exploit tags, judged on the hands in a spot.
+
+    Each tag carries the count it was judged on and the filter that puts those
+    hands on the chart. See SPEC.md, "Tags", for every rule and threshold.
+    """
+    return {"player": alias, "filter": filter, **tags_for(_spot_facts(alias, filter, game))}
+
+
 @app.get("/hands/{hand_id}")
 def hand(hand_id: int) -> dict:
     """Full replay of one hand -- for spot-checking a stat you do not believe."""
@@ -715,6 +731,10 @@ def hud(game_id: str) -> dict:
     the overlay prints side by side so a player drifting from their history is
     visible while it happens. Both come from `report()`, whose cache is keyed on
     the game, so a 30-second poll re-derives nothing between hands.
+
+    `tags` is the player's lifetime archetype and exploit tags (SPEC.md, "Tags").
+    They read the per-alias `Facts` cache, so they cost a few milliseconds on
+    top of it.
     """
     conn = db()
     latest = conn.execute(
@@ -745,6 +765,8 @@ def hud(game_id: str) -> dict:
                 "stats": by_alias.get(r["alias"], {"hands": 0}),
                 # The same figures over this game only.
                 "session": by_session.get(r["alias"], {"hands": 0}),
+                # Lifetime tags; a seat with no identity yet has none.
+                "tags": tags_for(facts_cached(conn, r["alias"]) if r["alias"] else []),
             }
             for r in seated
         ],

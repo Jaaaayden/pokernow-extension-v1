@@ -158,6 +158,23 @@ def test_hud_endpoint_keys_by_pn_id_not_seat(client):
         ).fetchone()[0]
         assert 0 < s["session"]["hands"] == dealt_here <= s["stats"]["hands"]
         assert set(s["session"]) == set(s["stats"])
+        # Lifetime tags beside them, every one with the count it rests on.
+        assert {"archetype", "tags", "profile"} <= set(s["tags"])
+        assert s["tags"]["profile"]["hands"] == s["stats"]["hands"]
+        for t in s["tags"]["tags"]:
+            assert {"id", "label", "kind", "tip", "n", "hits", "pct", "filter", "by"} <= set(t)
+
+
+def test_player_tags_endpoint(client):
+    body = client.get("/players/genericpoker/tags").json()
+    assert body["player"] == "genericpoker" and body["filter"] is None
+    assert {"archetype", "tags", "profile"} <= set(body)
+    assert body["archetype"] is not None, "421 hands is enough for an archetype"
+    assert body["tags"][0] == body["archetype"]
+    spot = client.get("/players/genericpoker/tags", params={"filter": "srp"}).json()
+    assert spot["filter"] == "srp" and spot["profile"]["hands"] < body["profile"]["hands"]
+    assert client.get("/players/genericpoker/tags", params={"filter": "nope"}).status_code == 400
+    assert client.get("/players/ghost/tags").status_code == 404
 
 
 def test_hand_replay(client):

@@ -52,8 +52,12 @@ DEFAULT_BASELINE: tuple[float, float] = (24, 17)  # seven-handed and up
 
 #: An archetype needs this many preflop decisions behind it.
 MIN_ARCHETYPE_OPPS = 100
-#: A REG with this many hands and no exploit tag is shown as BALANCED.
+#: A player no preflop rule places, with this many hands and no exploit tag, is
+#: shown as BALANCED.
 BALANCED_HANDS = 500
+#: Tags are held against each session only when there are this many sessions:
+#: with two, taking one out halves the evidence.
+MIN_SESSIONS = 3
 
 #: Every cutoff, by tag id: `pct` is compared against the rule's rate, `n` is the
 #: smallest sample the rule may fire on, `hits` a minimum count where the rule is
@@ -63,7 +67,7 @@ THRESHOLDS: dict[str, dict[str, float]] = {
     "bluffs_river": {"pct": 20, "n": 8},
     "calls_down_light": {"pct": 20, "n": 8},
     "folds_river": {"pct": 50, "n": 15},
-    "folds_to_3bet": {"pct": 50, "n": 15},
+    "folds_to_3bet": {"pct": 25, "n": 15},
     # The light-hand rules need a count *and* a share: the hero's cards are known
     # on every hand, so a bare count would fire on anyone with enough hands.
     "inelastic_vs_3bet": {"pct": 15, "n": 15, "hits": 3, "light_pct": 15, "hand_pct": 60},
@@ -86,7 +90,21 @@ THRESHOLDS: dict[str, dict[str, float]] = {
     "fish": {"vpip_excess": 12, "pfr_ratio": 0.45},
     "lag": {"vpip_excess": 8, "pfr_ratio": 0.6},
     "nit": {"vpip_excess": -12},
+    "tag": {"pfr_ratio": 0.5},
 }
+
+#: What a player no preflop rule places is named for: (id, label, the exploit
+#: tags that make the family, the advice). Mirrored in SPEC.md.
+STYLES: tuple[tuple[str, str, tuple[str, ...], str], ...] = (
+    ("sticky", "STICKY", ("calls_down_light", "sticky_vs_cbet", "inelastic_vs_3bet"),
+     "Hard to move off a hand. Value bet thin and big; do not bluff."),
+    ("fit_or_fold", "FIT OR FOLD", ("folds_river", "folds_to_cbet", "folds_to_3bet", "no_bluff", "checks_back_weak"),
+     "Gives up without a hand and bets only with one. Bet when they check; fold to their aggression."),
+    ("trapper", "TRAPPER", ("traps", "rarely_cbets"),
+     "Slow plays strong hands. Their checks are not weakness; bet thinner into them."),
+    ("gambler", "GAMBLER", ("jam_happy", "jams_light", "fourbets_light", "bluffs_river", "donks", "auto_cbet"),
+     "Puts chips in wide. Tighten up and let them bet into you."),
+)
 
 #: The fun tags: a display name and the classes it covers.
 FUN_HANDS: tuple[tuple[str, str, frozenset[str]], ...] = (
@@ -230,94 +248,118 @@ def _is_light(f: Facts, cutoff: float) -> bool:
 # --------------------------------------------------------------- profile ----
 
 
-def profile(facts: list[Facts]) -> dict:
-    """The measurements every rule reads, so `pnt tags` can show why a tag did or
-    did not fire. Rates are None when their denominator is empty."""
-    vpip_opp = [f for f in facts if f.vpip_opp]
-    vpip = sum(1 for f in vpip_opp if f.vpip)
-    pfr = sum(1 for f in vpip_opp if f.pfr)
-    vpip_excess = pfr_excess = None
-    if vpip_opp:
-        vpip_excess = sum((100 if f.vpip else 0) - _baseline(f.n_dealt_in)[0] for f in vpip_opp) / len(vpip_opp)
-        pfr_excess = sum((100 if f.pfr else 0) - _baseline(f.n_dealt_in)[1] for f in vpip_opp) / len(vpip_opp)
-
-    def rate(num: Callable[[Facts], bool], den: Callable[[Facts], bool]) -> dict:
-        n = _count(facts, den)
-        hits = _count(facts, lambda f: den(f) and num(f))
-        return {"hits": hits, "n": n, "pct": _pct(hits, n)}
-
-    def shown(pool: Callable[[Facts], bool], hit: set[str]) -> dict:
-        n, hits = _share(facts, pool, hit)
-        return {"hits": hits, "n": n, "pct": _pct(hits, n)}
-
-    agg = sum(f.aggressive.get("flop", 0) for f in facts)
-    agg_den = sum(f.agg_denom.get("flop", 0) for f in facts)
-    three_opp = _count(facts, lambda f: f.three_bet_opp)
-    pre_jams = _count(facts, lambda f: bool(f.jam.get("preflop")))
-    post_jams = _count(facts, lambda f: any(f.jam.get(s) for s in POSTFLOP_STREETS))
-    saw_flop = _count(facts, lambda f: f.saw_flop)
+def _rates() -> dict[str, tuple[Callable[[Facts], bool], Callable[[Facts], bool]]]:
+    """The rate rules, as (numerator, denominator) over one player's hands. A hit
+    counts only where the denominator holds."""
     t = THRESHOLDS
-
     return {
-        "hands": len(facts),
-        "vpip_opp": len(vpip_opp),
-        "vpip": _pct(vpip, len(vpip_opp)),
-        "pfr": _pct(pfr, len(vpip_opp)),
-        "vpip_excess": round(vpip_excess, 1) if vpip_excess is not None else None,
-        "pfr_excess": round(pfr_excess, 1) if pfr_excess is not None else None,
-        "pfr_ratio": round(pfr / vpip, 2) if vpip else None,
-        "tables": dict(sorted(Counter(f.n_dealt_in for f in vpip_opp).items())),
-        "af_flop": {"hits": agg, "n": agg_den, "pct": _pct(agg, agg_den)},
-        "3bet": rate(lambda f: f.three_bet, lambda f: f.three_bet_opp) if three_opp else {"hits": 0, "n": 0, "pct": None},
-        "wtsd": rate(lambda f: f.wtsd, lambda f: f.wtsd_opp),
-        "rules": {
-            "no_bluff": shown(lambda f: bool(f.aggressor.get("river")) and f.wtsd, {"air"}),
-            "calls_down_light": shown(lambda f: bool(f.called_bet.get("river")) and f.wtsd, {"air", "weak"}),
-            "folds_river": rate(lambda f: bool(f.folded_to_bet.get("river")), lambda f: bool(f.faced_bet.get("river"))),
-            "folds_to_3bet": rate(lambda f: f.fold_to_3bet, lambda f: f.fold_to_3bet_opp),
-            "called_3bet_light": rate(
-                lambda f: _is_light(f, t["inelastic_vs_3bet"]["hand_pct"]),
-                lambda f: f.hole_cards is not None and "call" in (f.pf_faced.get(3), f.pf_faced.get(4)),
-            ),
-            "fourbets_light": rate(
-                lambda f: _is_light(f, t["fourbets_light"]["hand_pct"]),
-                lambda f: f.hole_cards is not None and "raise" in (f.pf_faced.get(3), f.pf_faced.get(4)),
-            ),
-            "jams_light": rate(
-                lambda f: _is_light(f, t["jams_light"]["hand_pct"]),
-                lambda f: f.hole_cards is not None and bool(f.jam.get("preflop")),
-            ),
-            "limper": rate(lambda f: f.pf_faced.get(1) == "call", lambda f: 1 in f.pf_faced),
-            "jam_preflop": {"hits": pre_jams, "n": len(vpip_opp), "pct": _pct(pre_jams, len(vpip_opp))},
-            "jam_postflop": {"hits": post_jams, "n": saw_flop, "pct": _pct(post_jams, saw_flop)},
-            "folds_to_cbet": rate(lambda f: bool(f.fold_to_cbet.get("flop")), lambda f: bool(f.fold_to_cbet_opp.get("flop"))),
-            "cbet_flop": rate(lambda f: bool(f.cbet.get("flop")), lambda f: bool(f.cbet_opp.get("flop"))),
-            "checks_back": shown(lambda f: any(f.check_back.values()) and f.wtsd, {"strong"}),
-            "donks": rate(lambda f: bool(f.donk.get("flop")), lambda f: bool(f.donk_opp.get("flop"))),
-            "size_tell": _size_tell_measure(facts),
-        },
+        "3bet": (lambda f: f.three_bet, lambda f: f.three_bet_opp),
+        "wtsd": (lambda f: f.wtsd, lambda f: f.wtsd_opp),
+        "folds_river": (lambda f: bool(f.folded_to_bet.get("river")), lambda f: bool(f.faced_bet.get("river"))),
+        "folds_to_3bet": (lambda f: f.fold_to_3bet, lambda f: f.fold_to_3bet_opp),
+        "called_3bet_light": (
+            lambda f: _is_light(f, t["inelastic_vs_3bet"]["hand_pct"]),
+            lambda f: f.hole_cards is not None and "call" in (f.pf_faced.get(3), f.pf_faced.get(4)),
+        ),
+        "fourbets_light": (
+            lambda f: _is_light(f, t["fourbets_light"]["hand_pct"]),
+            lambda f: f.hole_cards is not None and "raise" in (f.pf_faced.get(3), f.pf_faced.get(4)),
+        ),
+        "jams_light": (
+            lambda f: _is_light(f, t["jams_light"]["hand_pct"]),
+            lambda f: f.hole_cards is not None and bool(f.jam.get("preflop")),
+        ),
+        "limper": (lambda f: f.pf_faced.get(1) == "call", lambda f: 1 in f.pf_faced),
+        "jam_preflop": (lambda f: bool(f.jam.get("preflop")), lambda f: f.vpip_opp),
+        "jam_postflop": (lambda f: any(f.jam.get(s) for s in POSTFLOP_STREETS), lambda f: f.saw_flop),
+        "folds_to_cbet": (lambda f: bool(f.fold_to_cbet.get("flop")), lambda f: bool(f.fold_to_cbet_opp.get("flop"))),
+        "cbet_flop": (lambda f: bool(f.cbet.get("flop")), lambda f: bool(f.cbet_opp.get("flop"))),
+        "donks": (lambda f: bool(f.donk.get("flop")), lambda f: bool(f.donk_opp.get("flop"))),
     }
 
 
-def _size_tell_measure(facts: list[Facts]) -> dict:
-    """Strong share of shown first bets, small (under 3/4 pot) against big."""
-    small = big = Counter()
-    streets: Counter[str] = Counter()
+#: The shown-hand rules, as (pool, the strengths that count as a hit).
+_SHOWN: dict[str, tuple[Callable[[Facts], bool], set[str]]] = {
+    "no_bluff": (lambda f: bool(f.aggressor.get("river")) and f.wtsd, {"air"}),
+    "calls_down_light": (lambda f: bool(f.called_bet.get("river")) and f.wtsd, {"air", "weak"}),
+    "checks_back": (lambda f: any(f.check_back.values()) and f.wtsd, {"strong"}),
+}
+
+
+def counts(facts: Iterable[Facts]) -> Counter:
+    """Every sum the profile is built from. Sums add, so the counts of two sets of
+    hands are the counts of both, and one session's can be taken back out of a
+    lifetime's -- which is how `tags_for` asks whether a tag needs that session."""
+    rates = _rates()
+    c: Counter = Counter()
     for f in facts:
-        if not f.wtsd:
-            continue
+        c["hands"] += 1
+        if f.vpip_opp:
+            base_vpip, base_pfr = _baseline(f.n_dealt_in)
+            c["vpip_opp"] += 1
+            c["vpip"] += f.vpip
+            c["pfr"] += f.pfr
+            c["vpip_excess"] += (100 if f.vpip else 0) - base_vpip
+            c["pfr_excess"] += (100 if f.pfr else 0) - base_pfr
+            c[f"tables.{f.n_dealt_in}"] += 1
+        c["af_flop.hits"] += f.aggressive.get("flop", 0)
+        c["af_flop.n"] += f.agg_denom.get("flop", 0)
+        for name, (num, den) in rates.items():
+            if den(f):
+                c[f"{name}.n"] += 1
+                c[f"{name}.hits"] += bool(num(f))
         s = strength(f)
         if s is None:
             continue
-        for street, bucket in f.bet_size.items():
-            side = small if bucket in ("small", "medium") else big
-            side["n"] += 1
-            side["hits"] += s == "strong"
-            streets[street] += 1
+        for name, (pool, hit) in _SHOWN.items():
+            if pool(f):
+                c[f"{name}.n"] += 1
+                c[f"{name}.hits"] += s in hit
+        if f.wtsd:
+            # The sizing tell: strong share of shown first bets, small (under 3/4
+            # pot) against big.
+            for street, bucket in f.bet_size.items():
+                side = "small" if bucket in ("small", "medium") else "big"
+                c[f"size_tell.{side}.n"] += 1
+                c[f"size_tell.{side}.hits"] += s == "strong"
+                c[f"size_tell.street.{street}"] += 1
+    return c
+
+
+def profile(facts: list[Facts] | Counter) -> dict:
+    """The measurements every rule reads, so `pnt tags` can show why a tag did or
+    did not fire. Rates are None when their denominator is empty. Takes the hands,
+    or their `counts`."""
+    c = facts if isinstance(facts, Counter) else counts(facts)
+
+    def m(name: str) -> dict:
+        hits, n = c[f"{name}.hits"], c[f"{name}.n"]
+        return {"hits": hits, "n": n, "pct": _pct(hits, n)}
+
+    opp, vpip, pfr = c["vpip_opp"], c["vpip"], c["pfr"]
+    streets = Counter({k.rsplit(".", 1)[1]: v for k, v in c.items() if k.startswith("size_tell.street.") and v > 0})
+    tables = {int(k.split(".")[1]): v for k, v in c.items() if k.startswith("tables.") and v > 0}
     return {
-        "small": {"hits": small["hits"], "n": small["n"], "pct": _pct(small["hits"], small["n"])},
-        "big": {"hits": big["hits"], "n": big["n"], "pct": _pct(big["hits"], big["n"])},
-        "street": streets.most_common(1)[0][0] if streets else None,
+        "hands": c["hands"],
+        "vpip_opp": opp,
+        "vpip": _pct(vpip, opp),
+        "pfr": _pct(pfr, opp),
+        "vpip_excess": round(c["vpip_excess"] / opp, 1) if opp else None,
+        "pfr_excess": round(c["pfr_excess"] / opp, 1) if opp else None,
+        "pfr_ratio": round(pfr / vpip, 2) if vpip else None,
+        "tables": dict(sorted(tables.items())),
+        "af_flop": m("af_flop"),
+        "3bet": m("3bet"),
+        "wtsd": m("wtsd"),
+        "rules": {
+            **{name: m(name) for name in _SHOWN},
+            **{name: m(name) for name in _rates() if name not in ("3bet", "wtsd")},
+            "size_tell": {
+                "small": m("size_tell.small"),
+                "big": m("size_tell.big"),
+                "street": streets.most_common(1)[0][0] if streets else None,
+            },
+        },
     }
 
 
@@ -356,6 +398,8 @@ def _exploits(p: dict) -> list[dict]:
              "faced_3bet")
 
     # Inelastic to a 3-bet: rarely folds one, or has shown up calling with junk.
+    # Never beside FOLDS TO 3BET: the fold rate is the direct read on whether they
+    # give up to a 3-bet, and the light calls only say what they continue with.
     th = t["inelastic_vs_3bet"]
     f3, light = r["folds_to_3bet"], r["called_3bet_light"]
     reasons = []
@@ -366,7 +410,7 @@ def _exploits(p: dict) -> list[dict]:
             f"called a 3-bet or 4-bet with a bottom-{100 - th['hand_pct']:.0f}% hand "
             f"{light['hits']} of {light['n']} shown times"
         )
-    if reasons:
+    if reasons and not any(x["id"] == "folds_to_3bet" for x in out):
         m = f3 if reasons[0].startswith("opened") else light
         out.append(_tag("inelastic_vs_3bet", "INELASTIC VS 3BET", "exploit",
                         "; ".join(reasons).capitalize() + ". 3-bet for value only, and bigger.",
@@ -429,7 +473,7 @@ def _exploits(p: dict) -> list[dict]:
                 f"small ones ({big['n']} and {small['n']} shown). "
                 + ("Fold to big bets; call small ones." if strong else "Call big bets; respect small ones."),
                 big["n"] + small["n"], big["hits"] + small["hits"], "wtsd",
-                "sizing", street=m["street"], kind="bet",
+                "sizing", street=m["street"], bet_kind="bet",
             ))
     return out
 
@@ -476,7 +520,51 @@ def _archetype(p: dict, exploits: list[dict]) -> dict | None:
         return tag("nit", "NIT", base + " Tight. Steal their blinds; fold to their raises.")
     if p["hands"] >= BALANCED_HANDS and not exploits:
         return tag("balanced", "BALANCED", base + f" No exploit stands out over {p['hands']} hands. Play solid.")
-    return tag("reg", "REG", base + " Solid overall; the exploit tags say where the gaps are.")
+    return _style(p, exploits, base, tag)
+
+
+def _style(p: dict, exploits: list[dict], base: str, tag: Callable[[str, str, str], dict]) -> dict:
+    """The archetype for a player no preflop rule placed, named for what their
+    exploit tags say they do: the `STYLES` family with the most tags. A tie goes
+    to the family whose tags stand on the most hands, so the label follows the
+    best-evidenced habit. With no exploit tag, preflop aggression names them."""
+    fired = {t["id"]: t["n"] for t in exploits}
+    best = None
+    for id, label, members, tip in STYLES:
+        hit = [fired[m] for m in members if m in fired]
+        if hit and (best is None or (len(hit), sum(hit)) > best[0]):
+            best = ((len(hit), sum(hit)), id, label, tip)
+    if best:
+        _, id, label, tip = best
+        return tag(id, label, base + " " + tip)
+    if (p["pfr_ratio"] or 0.0) >= THRESHOLDS["tag"]["pfr_ratio"]:
+        return tag("tag", "TAG", base + " Plays a normal range and raises it. The exploit tags will say where the gaps are.")
+    return tag("passive", "PASSIVE", base + " Plays a normal range but calls more than raises. Raise for value; respect their raises.")
+
+
+# ------------------------------------------------------------- sessions -----
+
+
+def _by_session(facts: list[Facts]) -> dict[str, Counter]:
+    by: dict[str, list[Facts]] = {}
+    for f in facts:
+        by.setdefault(f.game_id, []).append(f)
+    return {g: counts(fs) for g, fs in by.items()}
+
+
+def _carried_by(total: Counter, sessions: dict[str, Counter], ids: set[str]) -> dict[str, dict]:
+    """The tags in `ids` that stop firing when one session is taken out, each with
+    the session that carries it. A habit shows up across nights; a tag one session
+    makes -- a tilt, a card rush, one deep stack -- is that night, not the player.
+    When several sessions each carry it, the biggest is named."""
+    out: dict[str, dict] = {}
+    for g, c in sorted(sessions.items(), key=lambda kv: -kv[1]["hands"]):
+        rest = total.copy()
+        rest.subtract(c)
+        still = {t["id"] for t in _exploits(profile(rest))}
+        for id in ids - still - out.keys():
+            out[id] = {"game_id": g, "hands": c["hands"], "sessions": len(sessions)}
+    return out
 
 
 # ------------------------------------------------------------------ fun -----
@@ -507,16 +595,30 @@ def _fun(facts: list[Facts]) -> list[dict]:
 
 def tags_for(facts: Iterable[Facts]) -> dict:
     """Every tag the hands support: ``archetype`` (or None), the ordered ``tags``
-    list with the archetype first and the fun ones last, and the ``profile`` the
-    rules were judged on."""
+    list with the archetype first and the fun ones last, the ``profile`` the
+    rules were judged on, and the ``streaky`` exploit tags -- ones that fire over
+    every hand but not without some one session (`_carried_by`). Streaky tags are
+    left out of ``tags`` and do not name the archetype; each has a ``carried_by``.
+    Under MIN_SESSIONS sessions there is nothing to hold a tag against, and none
+    is streaky."""
     rows = list(facts)
     if not rows:
-        return {"archetype": None, "tags": [], "profile": {"hands": 0}}
-    p = profile(rows)
+        return {"archetype": None, "tags": [], "profile": {"hands": 0}, "streaky": []}
+    sessions = _by_session(rows)
+    total: Counter = Counter()
+    for c in sessions.values():
+        total.update(c)
+    p = profile(total)
     exploits = _exploits(p)
+    carried = {}
+    if len(sessions) >= MIN_SESSIONS:
+        carried = _carried_by(total, sessions, {t["id"] for t in exploits})
+    streaky = [{**t, "carried_by": carried[t["id"]]} for t in exploits if t["id"] in carried]
+    exploits = [t for t in exploits if t["id"] not in carried]
     arch = _archetype(p, exploits)
     return {
         "archetype": arch,
         "tags": [*([arch] if arch else []), *exploits, *_fun(rows)],
         "profile": p,
+        "streaky": streaky,
     }

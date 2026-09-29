@@ -128,7 +128,7 @@ street is a probe and counts as neither.
 ### Facing a bet, the aggressor, and checking back
 
 The c-bet family above is defined against one bettor, the previous street's
-aggressor. Three generic facts cover the rest.
+aggressor. Three generic facts cover the rest, and the tags read them.
 
 | Fact | Definition | Notes |
 |---|---|---|
@@ -398,11 +398,144 @@ hands that ended before the river.
 `cards.HAND_RANKING` orders the 169 classes strongest first by all-in equity
 against one random hand, the ordering every starting-hand chart reproduces.
 `hand_pct` is a class's place in it as a percentile: 0.6 is AA, 100 is 32o, so
-"a bottom-40% hand" is `hand_pct>=60`. It is a reference, not a claim about
-any spot: a 3-bet call that is bad six-handed can be fine heads-up.
+"a bottom-40% hand" is `hand_pct>=60`. It is a reference for the tags, not a
+claim about any spot: a 3-bet call that is bad six-handed can be fine heads-up,
+and the tag that reads it says which count it rests on.
 
 Filters: `hand=72` (both suits), `hand=72o`, `hand=77`, `hand!=AA`, and
 `hand_pct>=60`. A holding term matches only where the cards are known.
+
+---
+
+## Tags
+
+A tag is a claim about a player you can act on at the table, backed by a count
+and a spot filter that puts the hands behind it on the chart. `tags.py` mirrors
+this section; the HUD shows them as chips, `GET /players/{alias}/tags` and
+`pnt tags` print them. Every threshold lives in `tags.THRESHOLDS`, and this table
+is the other copy.
+
+Three rules hold throughout:
+
+- **Too small a sample is unknown, not false.** A rule under its minimum is
+  silent, on the principle that prints `--` for a rate with no opportunities.
+- **Shown-hand evidence is biased toward showdowns.** A river bet that reached
+  showdown got called; the bluffs that worked are the hands missing. Every tip
+  built from shown hands says "shown". The hero's cards are known on *every*
+  hand, so the hero's shown evidence is complete where an opponent's is not --
+  which is why the light-hand rules need a share as well as a count.
+- **Lifetime only.** Tags are judged over every hand on record; a spot filter
+  narrows the hands they are judged on, never the rules.
+- **A habit outlasts any one night.** With 3 or more sessions (`MIN_SESSIONS`),
+  every exploit tag that fires is judged again on the hands of all sessions but
+  one, for each session in turn. One that stops firing without some session is
+  **streaky**: it is dropped from `tags`, does not name the archetype, and is
+  returned under `streaky` with `carried_by` (that session's `game_id` and
+  hands; the biggest when several each carry it). Pooling, not a per-session
+  average, is still what a tag is judged on: an average counts a 12-hand game
+  as much as a 400-hand one, and most games are too small to judge a rule alone.
+  The sums behind the profile add (`counts`), so this costs one pass over the
+  hands.
+
+### Baselines
+
+Looseness is measured hand by hand against what is ordinary at that hand's table
+size, so a player seen heads-up and six-handed is judged fairly on both. These
+are judgement values.
+
+| Dealt in | VPIP | PFR |
+|---|---|---|
+| 2 | 68 | 50 |
+| 3 | 52 | 36 |
+| 4 | 44 | 30 |
+| 5 | 38 | 26 |
+| 6 | 30 | 21 |
+| 7+ | 24 | 17 |
+
+```
+vpip_excess = mean over VPIP opportunities of (100·vpip − baseline VPIP for that hand's table)
+pfr_excess  = the same for PFR
+pfr_ratio   = PFR count / VPIP count
+```
+
+### Archetype
+
+One per player, first rule that fits, and none under 100 VPIP opportunities.
+Exploit tags are judged first because BALANCED depends on them.
+
+| Archetype | Rule |
+|---|---|
+| **MANIAC** | pfr_excess ≥ +15 and (flop AF ≥ 60, or preflop jams ≥ 3% of opportunities, or 3-bet ≥ 18%) |
+| **STATION** | fold to flop c-bet ≤ 30% (n ≥ 25) and WTSD ≥ 38% (n ≥ 40) and pfr_ratio < 0.5 |
+| **FISH** | vpip_excess ≥ +12 and pfr_ratio < 0.45 |
+| **LAG** | vpip_excess ≥ +8 and pfr_ratio ≥ 0.6 |
+| **NIT** | vpip_excess ≤ −12 |
+| **BALANCED** | hands ≥ 500 and no exploit tag fired |
+| *style* | otherwise, the style below with the most exploit tags; a tie goes to the one whose tags rest on the larger total `n` |
+| **TAG** / **PASSIVE** | otherwise, with no exploit tag: pfr_ratio ≥ 0.5, else PASSIVE |
+
+| Style | Exploit tags in the family |
+|---|---|
+| **STICKY** | CALLS DOWN LIGHT, STICKY VS CBET, INELASTIC VS 3BET |
+| **FIT OR FOLD** | FOLDS RIVER, FOLDS TO CBET, FOLDS TO 3BET, NO BLUFF, CHECKS BACK WEAK |
+| **TRAPPER** | TRAPS, RARELY CBETS |
+| **GAMBLER** | JAM HAPPY, JAMS LIGHT, 4BETS LIGHT, BLUFFS RIVER, DONKS, AUTO CBET |
+
+Only tags that are not streaky count toward a style.
+
+### Exploit tags
+
+"Shown" populations count hands with cards known and a board. **strong** is two
+pair or better, or a pair that is top pair or an overpair; **weak** is bottom
+pair or a pair entirely on the board; **air** is high card or a busted draw.
+**Light** means `hand_pct` at or past the cutoff and not a troll hand
+(`TROLL_HANDS` = 72, 92 and K2o, which these games play on purpose).
+
+| Tag | Numerator | Denominator | Fires | Min n | Filter |
+|---|---|---|---|---|---|
+| **NO BLUFF** | air | `aggressor[river]` and WTSD, shown | ≤ 7% | 10 | `aggressor_river,wtsd` (made) |
+| **BLUFFS RIVER** | air | same | ≥ 20% | 8 | same |
+| **CALLS DOWN LIGHT** | air or weak | `called_bet[river]` and WTSD, shown | ≥ 20% | 8 | `called_bet_river,wtsd` (made) |
+| **FOLDS RIVER** | `folded_to_bet[river]` | `faced_bet[river]` | ≥ 50% | 15 | `faced_bet_river` |
+| **FOLDS TO 3BET** | Fold to 3-Bet | its opportunity | ≥ 25% | 15 | `faced_3bet` |
+| **INELASTIC VS 3BET** | Fold to 3-Bet ≤ 15% (n ≥ 15), *or* light (cutoff 60) calls of a 3-bet or 4-bet ≥ 3 and ≥ 15% of shown ones; never when FOLDS TO 3BET fires, since the fold rate is the direct read | | | | `faced_3bet_any=call` |
+| **4BETS LIGHT** | light (cutoff 50) 4-bets or 5-bets | shown 4-bets and 5-bets | ≥ 3 and ≥ 15% | | `4bet` |
+| **JAMS LIGHT** | light (cutoff 50) preflop jams | shown preflop jams | ≥ 3 and ≥ 15% | | `jam_preflop` |
+| **LIMPER** | `limp` | `unopened` | ≥ 45% | 30 | `limp` |
+| **JAM HAPPY** | preflop jams ≥ 5 and ≥ 3% of VPIP opportunities, else postflop jams ≥ 8 and ≥ 8% of flops seen | | | | `jam` |
+| **FOLDS TO CBET** | Fold to C-Bet (flop) | its opportunity | ≥ 50% | 25 | `faced_cbet_flop` |
+| **STICKY VS CBET** | same | same | ≤ 30% | 25 | same |
+| **AUTO CBET** | C-Bet (flop) | its opportunity | ≥ 60% | 25 | `cbet_flop_opp` |
+| **RARELY CBETS** | same | same | ≤ 35% | 25 | same |
+| **CHECKS BACK WEAK** | strong | `check_back` any street and WTSD, shown | ≤ 35% | 10 | `check_back,wtsd` (made) |
+| **TRAPS** | strong | same | ≥ 60% | 8 | same |
+| **DONKS** | Donk Bet (flop) | its opportunity | ≥ 35% | 15 | `donk_flop` |
+| **BIG = STRONG** / **BIG = BLUFF** | strong share of shown first bets, `large`+`overbet` against `small`+`medium`, any street | | gap ≥ 40 points | 6 each side | `wtsd` (sizing, `bet`, the street with most bets) |
+
+Each tag reports `n` (the denominator it was judged on), `hits`, `pct`, and the
+filter and chart view that reproduce it. The rate tags' `n` is exactly the hands
+their filter finds; the shown ones' `n` is those hands with cards known;
+`test_every_tag_reproduces_on_the_chart` holds them to it.
+
+### Fun tags
+
+For each of 7-2, 9-2 and K-2o: the shown hands in that class the player raised
+preflop with. **7-2 ALL-IN-PRE ×n** when at least one was a preflop jam
+(`hand=72,jam_preflop`), else **7-2 RAISES ×n** from two raises (`hand=72,pfr`).
+
+### Judgement calls
+
+16. **Thresholds are calibrated, not derived.** Set against the 8,036-hand
+    database on 2026-09-14 so that each rule separates a few players from the
+    rest; the first draft fired on the whole table for some rules and could
+    never fire for others. A different pool wants different numbers, and
+    `THRESHOLDS` is the one place to change them.
+17. **Troll hands are never evidence.** A 72o that called a 3-bet was a bet on
+    the side game, not a misread of the spot, so it is excluded from the light-hand
+    counts and celebrated in the fun tags instead.
+18. **Baselines are judgement values**, chosen from what ordinary play looks like
+    at each table size rather than measured from this pool -- the pool is nine
+    friends, and measuring it would make the loosest table read as normal.
 
 ---
 
