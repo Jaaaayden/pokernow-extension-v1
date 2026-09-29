@@ -40,6 +40,7 @@ from pnt.ingest.importer import (
 from pnt.stats.allin import allin_hand_list, allin_report
 from pnt.stats.derive import Facts
 from pnt.stats.filters import parse_filter, vocabulary
+from pnt.stats.live import snapshot
 from pnt.stats.pots import DEFAULT_DAYS, DEFAULT_LIMIT, DEFAULT_MIN_POT, big_pots
 from pnt.stats.queries import (
     aggregate,
@@ -733,8 +734,8 @@ def hud(game_id: str) -> dict:
     the game, so a 30-second poll re-derives nothing between hands.
 
     `tags` is the player's lifetime archetype and exploit tags (SPEC.md, "Tags").
-    They read the per-alias `Facts` cache, so they cost a few milliseconds on
-    top of it.
+    They read the same per-alias `Facts` cache `/live` fills on every poll, so
+    they cost a few milliseconds on top of it.
     """
     conn = db()
     latest = conn.execute(
@@ -771,6 +772,30 @@ def hud(game_id: str) -> dict:
             for r in seated
         ],
     }
+
+
+@app.get("/live/{game_id}")
+def live(
+    game_id: str,
+    min_hands: Annotated[
+        int, Query(alias="min", ge=1, description="hands a spot needs before it counts")
+    ] = 1,
+    min_known: Annotated[
+        int,
+        Query(alias="known", ge=0, description="shown hands a spot narrowed to this board's texture must keep"),
+    ] = 5,
+) -> dict:
+    """The hand in progress: everyone's spot right now, resolved against their history.
+
+    Read straight from the raw lines, so it needs no rebuild and is current as of
+    the last poll. Between hands it is `{"hand": null}`. Each player still in
+    carries `resolved`: the closest spot with at least `min` hands behind it, the
+    filter that names it (paste it into the chart), how they played it there, and
+    what they showed up with per decision (`showings`), read on the live street.
+    A postflop spot is narrowed to boards like this one while at least `known`
+    shown hands survive the narrowing.
+    """
+    return snapshot(db(), game_id, min_hands=min_hands, min_known=min_known)
 
 
 class MergeRequest(BaseModel):

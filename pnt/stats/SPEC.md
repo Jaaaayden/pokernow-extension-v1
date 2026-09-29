@@ -407,6 +407,131 @@ Filters: `hand=72` (both suits), `hand=72o`, `hand=77`, `hand!=AA`, and
 
 ---
 
+## Decision points (nodes)
+
+A *node* is where a player stands in a hand, written as a filter, so the hand in
+progress can be looked up in the player's history the way any spot is.
+`nodes.py` mirrors this section; the live HUD reads it through `/live`.
+
+Each player's path through a hand is one node per voluntary action, plus a
+pending one for the player to act. A node's filter is built from five parts, in
+this order:
+
+    position, *preflop history, pot type, *postflop history, situation
+
+| Part | Content |
+|---|---|
+| **position** | `position=<POS>`; withheld on dead-button and irregular-blind hands, as every positional view does |
+| **preflop history** | The terms this player's earlier preflop decisions earned (table below) |
+| **pot type** | `limped` / `srp` / `3bet_pot` / `4bet_pot` from `pot_level`, from the first postflop node on |
+| **postflop history** | The terms their earlier postflop decisions earned |
+| **situation** | The term for this decision point, or none when nothing tracks it |
+
+**Preflop** (L is the bet level when they act):
+
+| L | Situation | Decision → history term |
+|---|---|---|
+| 1 | `unopened` | raise → `opener`; call → `limp`; check → nothing; fold ends the path |
+| 2 | `faced_open` | raise → `3bet`; call → `called_open` |
+| 3 | opener: `faced_3bet`, else `faced_3bet_any` | raise → `4bet`; call → `faced_3bet=call` / `faced_3bet_any=call` |
+| 4 | `faced_4bet` | raise → `5bet`; call → `faced_4bet=call` |
+| 5 | `faced_5bet` | raise → `faced_5bet=raise`; call → `faced_5bet=call` |
+| 6+ | none | nothing |
+
+**Postflop** (S is the street; the conditions are the Postflop table's):
+
+| Condition | Situation | Decision → history term |
+|---|---|---|
+| Previous street's aggressor, first in | `cbet_S_opp` | bet → `cbet_S=<size>` (`cbet_S` when the pot is empty); check → nothing |
+| Facing a c-bet before anyone raises it | `faced_cbet_S=<size>` (`faced_cbet_S` when unsized) | call → `called_cbet_S`; raise → `raised_cbet_S`; fold ends the path |
+| Could lead into the previous street's aggressor | `donk_S_opp` | bet → `donk_S`; check → nothing |
+| Anything else | none | nothing |
+
+So a button who opens, calls a 3-bet and then faces a small c-bet walks
+`position=BTN,unopened` → `position=BTN,opener,faced_3bet` →
+`position=BTN,opener,faced_3bet=call,3bet_pot,faced_cbet_flop=small`.
+
+Every node with a filter and a decision satisfies its own filter on the finished
+hand's `Facts`, and so does every history term it adds. That is the test that
+keeps this table and `derive.py` in agreement.
+
+### Finding the closest spot
+
+A node with too few hands behind it (`min_hands`, 1 by default) is widened one
+step at a time, most specific detail first, until one has enough. The answer
+carries `exact: false` and a note per step. When even the widest form is empty
+the answer is *no data*, and a chart following the action shows that player on
+all their hands.
+
+Preflop node: (1) as is; (2) without `position=`; (3) the **parent node** — drop
+the situation and turn the last history term back into the situation it was
+decided at (`opener`/`limp` → `unopened`, `3bet`/`called_open` → `faced_open`,
+`4bet` → `faced_3bet` or `faced_3bet_any`, `5bet` → `faced_4bet`, `X=d` → `X`),
+with position; (4) the same without; repeat 3–4 up the path to the bare
+situation. A player facing a 5-bet with no history of it is shown their 4-bet
+spot: the range they arrived with.
+
+Postflop node: (1) as is; (2) any size (`faced_cbet_S=small` → `faced_cbet_S`);
+(3) without postflop history; (4) without `position=`; (5) without preflop
+history; (6) the pot one level down (`4bet_pot` → `3bet_pot` → `srp`, `limped` →
+`srp`); (7) without a pot type.
+
+A node nothing tracks (facing a bet in a limped pot, say) is answered from the
+nearest earlier node on the path that has a filter, marked as such.
+
+The decision mix reported beside a resolved spot is counted at the *resolved*
+situation, not the asked one: a player shown their 4-bet spot is shown what they
+did there.
+
+**Boards like this one.** Before each rung is taken as it stands, it is tried
+narrowed to the live board's texture: the highest-card tag and `paired` /
+`unpaired`, both first and then the highest card alone, as `<street>=<tag>` terms
+on the live node's street. A narrowed rung is kept only when it still has
+`min_hands` hands **and** at least `min_known` shown hands (5 by default) behind
+the split the HUD will print -- the decision's own once it is made, every
+decision's while it is pending; the texture is there to sharpen what they showed up with, and a split over two
+hands sharpens nothing. The narrowing is part of the answer, not of the node: the
+reported `filter` carries it (so a chart following the spot narrows too) and
+`texture` lists the terms used, while `exact` still speaks of the node alone.
+Preflop nodes are never narrowed.
+
+### What they showed up with
+
+Beside the decision mix, every resolved spot reports `showings`: per decision, the
+hands that made it, how many had cards known, and what those were worth **on the
+board as it stood on the live node's street**. A flop call that rivered a flush was
+a draw when the call was made, and that is what it is counted as.
+
+| Bucket | Postflop, on that street's board | Preflop, by `hand_pct` |
+|---|---|---|
+| `strong` | two pair or better, or top pair / an overpair | ≤ 15 |
+| `medium` | middle pair, or a pocket pair under the top card | ≤ 50 |
+| `weak` | bottom pair, or a pair entirely on the board | the rest |
+| `draw` | no pair, but a flush or straight draw -- flop and turn only | — |
+| `air` | high card; on the river a draw has missed | — |
+
+The postflop rule is the exploit tags' `strength`, and the preflop cutoffs are
+judgement values (`tags.PREFLOP_STRENGTH`). The HUD shows `strong` as *value*,
+`medium` and `weak` together as *marginal*, and the two others by name.
+
+A hand is *known* for a street only when its cards are known **and** its board
+reached that street: a hand that ended on the flop says nothing about the turn,
+and drops out of a turn spot's count. `known / hands` is printed with every split,
+and the "Ranges" coverage caveat applies twice over -- a called flop bet that
+reached showdown is the one that kept going.
+
+Which decision's split the HUD puts on the line is the answering spot's
+`decision`: the live node's own once made, or one row per decision while they are
+to act. When the answer comes from earlier on the path -- an untracked node
+answered by its nearest tracked ancestor, or a preflop spot widened up to a parent
+node -- the answer is flagged `arrived`, the decision is the one they made *there*
+this hand, and the line reads "arrived with": those hands are the range they
+brought to this street, read on this street's board. That replaces the ancestor's
+fold/call/raise mix, which under the live node's label read as a claim about a
+spot it was never counted at.
+
+---
+
 ## Tags
 
 A tag is a claim about a player you can act on at the table, backed by a count

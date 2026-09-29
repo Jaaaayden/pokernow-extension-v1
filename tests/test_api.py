@@ -30,6 +30,45 @@ def client(tmp_path, monkeypatch):
     return TestClient(app_module.app)
 
 
+def test_live_endpoint_is_quiet_between_hands_and_validates_min(client):
+    assert client.get(f"/live/{HU_GAME}").json() == {"game_id": HU_GAME, "hand": None}
+    assert client.get("/live/nope").json()["hand"] is None
+    assert client.get(f"/live/{HU_GAME}", params={"min": 0}).status_code == 422
+    assert client.get(f"/live/{HU_GAME}", params={"known": -1}).status_code == 422
+    assert client.get(f"/live/{HU_GAME}", params={"known": 0}).status_code == 200
+
+
+def test_live_endpoint_shows_the_hand_in_progress(client):
+    """Push the heads-up log back in minus the tail of its last hand: that hand is
+    live again, with everyone's spot resolved against the history already stored."""
+    entries = sorted(read_csv(HU), key=lambda e: e.ord)
+    last = max(int(e.entry.split("#")[1].split(" ")[0]) for e in entries if e.entry.startswith("-- starting hand #"))
+    start = next(i for i, e in enumerate(entries) if e.entry.startswith(f"-- starting hand #{last} "))
+    # A fresh game id, so the stored history is the whole heads-up log and the
+    # live hand is this one alone.
+    game = "live-probe"
+    body = {
+        "game_id": game,
+        "entries": [{"entry": e.entry, "at": e.at, "order": e.ord} for e in entries[start : start + 6]],
+        "source": "test",
+        "rebuild": False,
+    }
+    assert client.post("/ingest", json=body).status_code == 200
+    snap = client.get(f"/live/{game}").json()
+    assert snap["hand_number"] == last
+    assert snap["to_act"] in {p["pn_id"] for p in snap["players"]}
+    assert {p["position"] for p in snap["players"]} == {"BTN/SB", "BB"}
+    acting = next(p for p in snap["players"] if p["pn_id"] == snap["to_act"])
+    assert acting["node"]["decision"] is None
+    assert acting["resolved"] is not None and acting["resolved"]["hands"] > 0
+    assert "filter" in acting["resolved"]
+    assert set(acting["resolved"]) >= {
+        "filter", "hands", "known", "exact", "relaxed", "decisions", "label",
+        "decision", "arrived", "street", "texture", "showings",
+    }
+    assert set(acting["resolved"]["showings"]) == set(acting["resolved"]["decisions"])
+
+
 def test_health_reports_a_total_parse(client):
     body = client.get("/health").json()
     assert body["hands"] == 549
