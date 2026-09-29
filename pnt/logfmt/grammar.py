@@ -309,6 +309,12 @@ RULES: list[Rule] = [
         re.compile(r"^Some players choose to not run it twice\.$"),
         lambda m, o, r: E.Noise(ord=o, raw=r, kind="rit_declined"),
     ),
+    # A table whose settings force run-it-twice announces it instead of asking.
+    # PokerNow's own text drops the "to"; accept it either way.
+    (
+        re.compile(r"^The board will run it twice due (?:to )?the game settings\.$"),
+        lambda m, o, r: E.Noise(ord=o, raw=r, kind="rit_forced"),
+    ),
     # -- table administration. None of it moves chips inside a hand: a rebuy shows
     # -- up as a larger stack on the next `Player stacks:` line, and net is
     # -- collected-minus-contributed per hand, so none of these touch a stat.

@@ -271,3 +271,16 @@ def test_an_id_change_on_login_is_recognized():
     )
     assert isinstance(ev, Noise)
     assert ev.kind == "id_changed"
+
+
+def test_a_forced_run_it_twice_is_recognized():
+    """Seen live on 2026-09-17, on a table set to always run it twice."""
+    from pnt.logfmt.events import Noise
+
+    for line in (
+        "The board will run it twice due the game settings.",
+        "The board will run it twice due to the game settings.",
+    ):
+        ev = classify(line, 1)
+        assert isinstance(ev, Noise)
+        assert ev.kind == "rit_forced"
