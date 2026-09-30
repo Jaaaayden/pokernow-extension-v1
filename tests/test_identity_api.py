@@ -139,3 +139,17 @@ def test_players_counts_hands_without_deriving_them(client, stats):
         assert p["hands"] == sum(i["hands"] for i in p["identities"])
         if p["alias"] in derived:
             assert p["hands"] == derived[p["alias"]]["hands"]
+
+
+def test_a_players_spot_endpoints_follow_a_merge_and_its_undo(client):
+    """They are served from a per-player cache, which a merge must not outlive."""
+
+    def hands(alias):
+        return client.get(f"/players/{alias}/stats", params={"filter": "srp"}).json()["hands"]
+
+    mine, theirs = hands("genericpoker"), hands("onlybluffs")
+    assert hands("genericpoker") == mine  # the second ask, from the cache
+    undo = client.post("/aliases/merge", json={"source": "onlybluffs", "target": "genericpoker"}).json()["undo"]
+    assert hands("genericpoker") == mine + theirs
+    assert client.post("/aliases/split", json=undo).status_code == 200
+    assert hands("genericpoker") == mine

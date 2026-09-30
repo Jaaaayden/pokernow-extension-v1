@@ -49,7 +49,6 @@ from pnt.stats.queries import (
     aggregate,
     display_names,
     facts_cached,
-    facts_for,
     hand_list,
     player_games,
     positional_report,
@@ -307,10 +306,14 @@ def _spot_facts(conn: sqlite3.Connection, alias: str, filter: str | None, game: 
     # The name map is what lets `vs=henry` name a person rather than an ID.
     pred = _predicate(conn, filter)
     try:
-        facts = facts_for(conn, alias, game)
+        # Cached: the chart asks for one player's range, strip and hands on every
+        # change of spot, and deriving all their hands each time cost ~300 ms a
+        # request on the built-in tracker. A rebuild re-derives only its own game.
+        facts = facts_cached(conn, alias, game)
     except ValueError as exc:
         raise ApiError(404, str(exc)) from exc
-    return [f for f in facts if pred(f)] if pred is not None else facts
+    # A new list either way: the cached one is shared with the next caller.
+    return [f for f in facts if pred(f)] if pred is not None else list(facts)
 
 
 def _not_found(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:

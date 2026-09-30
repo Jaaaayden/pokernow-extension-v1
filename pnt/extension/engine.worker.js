@@ -43,12 +43,26 @@ const ready = (async () => {
     engineZip: await zip.arrayBuffer(),
     storage,
   });
-  // The first lifetime report derives every hand once (seconds, on a long
-  // history); everything after it is per game. Pay that now, before a table is
-  // waiting on it, once whatever arrived during start-up has been answered.
-  setTimeout(() => host.request("GET", "/stats"), 500);
+  warmWhenQuiet(host);
   return host;
 })();
+
+// The first lifetime report derives every hand once (seconds, on a long history);
+// everything after it is per game. Pay that before a table is waiting on it -- but
+// only once nothing has been asked for a moment. Python answers one request at a
+// time, so a warm-up that started as a page opened put the page's own requests
+// seconds behind it.
+const WARM_WHEN_QUIET_MS = 1_500;
+let warmTimer = null;
+let warmed = false;
+function warmWhenQuiet(host) {
+  if (warmed) return;
+  clearTimeout(warmTimer);
+  warmTimer = setTimeout(() => {
+    warmed = true;
+    host.request("GET", "/stats");
+  }, WARM_WHEN_QUIET_MS);
+}
 
 onmessage = async ({ data }) => {
   const { id, op } = data;
@@ -57,6 +71,7 @@ onmessage = async ({ data }) => {
     let result = null;
     if (op === "flush") await host.flush();
     else result = host.request(data.method, data.url, data.body);
+    warmWhenQuiet(host);
     postMessage({ id, ok: true, result });
   } catch (e) {
     postMessage({ id, ok: false, error: String(e?.message || e) });
