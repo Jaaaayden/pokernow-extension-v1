@@ -662,3 +662,9 @@ def test_only_this_machine_may_be_named_as_host(server):
 
     assert TestClient(server.app, base_url="http://evil.example").get("/health").status_code == 400
     assert TestClient(server.app, base_url="http://localhost").get("/health").status_code == 200
+
+
+@pytest.mark.parametrize("path", ["/", "/players.html", "/chart", "/stats.html", "/allin.html", "/pots.html"])
+def test_pages_may_be_framed_only_by_themselves(server, path):
+    """Framed by any other site, /players could be clickjacked into a merge."""
+    assert server.get(path).headers["content-security-policy"] == "frame-ancestors 'self'"

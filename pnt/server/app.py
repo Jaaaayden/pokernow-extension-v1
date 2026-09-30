@@ -144,6 +144,13 @@ def db():
     return connect(DB_PATH)
 
 
+#: Only these pages may show these pages in a frame. The extension frames its own
+#: copies, never the server's, so no other site has a reason to. Framed by one,
+#: /players could be steered invisibly into a merge or rename -- and that click,
+#: coming from the page itself, carries the write header.
+FRAME_ANCESTORS = "frame-ancestors 'self'"
+
+
 def _page(name: str) -> HTMLResponse:
     """One of the static pages.
 
@@ -153,7 +160,7 @@ def _page(name: str) -> HTMLResponse:
     """
     return HTMLResponse(
         (PAGES / name).read_text(encoding="utf-8"),
-        headers={"Cache-Control": "no-store"},
+        headers={"Cache-Control": "no-store", "Content-Security-Policy": FRAME_ANCESTORS},
     )
 
 

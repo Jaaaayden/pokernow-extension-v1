@@ -98,7 +98,7 @@
       showServer();
     }
     const where = $("backend").value === "builtin" ? "built in" : "companion";
-    $("health").textContent = h.ok ? `${where} · ${h.data.hands} hands` : `${where} · not reachable`;
+    $("health").textContent = h.ok ? `${where} · ${h.data.hands} hands` : `${where} · not reachable: ${h.error}`;
     $("health").className = h.ok ? "ok" : "bad";
   }
 
