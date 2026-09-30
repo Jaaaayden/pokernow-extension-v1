@@ -299,6 +299,13 @@ terminal and no admin rights. It is built this way for these reasons:
   hands. `install` refuses a path that does not exist.
 - **A terminal `pnt serve` wins.** If the port is already taken, the task waits
   instead of crash-looping, and takes over once you close the terminal.
+- **One server per port.** uvicorn binds with `SO_REUSEADDR`, which on Windows
+  lets a second process listen on a port already in use: two servers then split
+  the requests, and pages from the new one fetch data from the old. So the server
+  binds its own socket with `SO_EXCLUSIVEADDRUSE` (`svc.bind`, used by `pnt serve`,
+  the task and the native host alike), and `pnt serve` refuses a port something
+  already answers on. `/health` reports the server's pid, and `pnt service restart`
+  waits for a new pid to answer; if an old server keeps the port, it names it.
 - **Two Windows defaults would kill it:** tasks are ended after 72 hours, and
   whenever a laptop goes on battery. Both are turned off.
 - **The port is 52000, not 8000.** 8000 is the busiest port on a developer's
@@ -325,7 +332,10 @@ terminal and no admin rights. It is built this way for these reasons:
   refuses any write without an `x-pnt` header or from a foreign `Origin`: no page
   can add a custom header cross-site without a preflight the server never grants.
   A game ID must match `[A-Za-z0-9_-]{1,64}`, because it becomes a file name in the
-  log folder. `test_api.py` pins all four.
+  log folder. The pages send `frame-ancestors 'self'`: framed invisibly by another
+  site, /players could be clickjacked into a merge, and that click, coming from the
+  page itself, carries the header. The extension frames its own copies of the
+  pages, never the server's. `test_api.py` pins all five.
 
 ### Why setup is one command
 

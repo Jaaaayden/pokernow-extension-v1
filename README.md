@@ -226,7 +226,10 @@ holds: every game, and every merge, note and review mark. The companion's pages
 are also at **<http://127.0.0.1:52000>**.
 
 **After updating the companion, run `pnt service restart`** (or restart Chrome),
-because a running server keeps the old code.
+because a running server keeps the old code. The restart checks that the new
+server is the one answering. If an old one (a `pnt serve` left open in a terminal)
+still holds the port, it names the process to end. If the tracker can't be
+reached, the HUD and the ⚙ settings say why.
 
 ### Commands
 
