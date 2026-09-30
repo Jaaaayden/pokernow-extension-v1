@@ -226,6 +226,28 @@ async function call(path, init) {
 
 const PAGES = chrome.runtime.getURL("pages/");
 
+// ------------------------------------------------------------- bringing over --
+// The settings page, while the tracker is the built-in one, can take things from a
+// companion still running beside it (an earlier version's server): its judgements,
+// and whole games the extension never saw. Only the page's own clicks get here, and
+// the page asks for the permissions first, since only a click can.
+function fromOwnPage(sender) {
+  if (sender.id !== chrome.runtime.id || !sender.url?.startsWith(PAGES)) throw new Error("not an extension page");
+}
+
+// The companion's host is opened for this and has no other use here, but one call
+// follows another, so it is let go once they stop rather than after each.
+let releasing = null;
+async function fromServer(work) {
+  if ((await backend()) === "companion") throw new Error("the tracker is already the companion: nothing to bring over");
+  clearTimeout(releasing);
+  try {
+    return await work();
+  } finally {
+    releasing = setTimeout(async () => { if ((await backend()) !== "companion") dropCompanion(); }, 30_000);
+  }
+}
+
 // ------------------------------------------------------------------- moving --
 // Switching trackers (⚙) can bring everything along: each game's raw lines --
 // every hand is derived from them -- and then the judgements no log holds
@@ -235,28 +257,51 @@ const PAGES = chrome.runtime.getURL("pages/");
 const MOVE_CHUNK = 5_000;
 let moving = null;
 
+// The body of a successful {status, body}; an error with the API's message otherwise.
+const bodyOf = ({ status, body }) => {
+  if (status >= 400) throw new Error(body?.detail || `${status}`);
+  return body;
+};
+const postOf = (data) => ({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(data) });
+
+// The companion's judgements, in the shape POST /export/judgements takes. A server
+// from before the built-in tracker has no /export/judgements, but it has the same
+// three things under /players, /reviewed and /notes.
+async function judgementsOfCompanion() {
+  const whole = await answerFrom("companion", "/export/judgements");
+  if (whole.status !== 404) return bodyOf(whole);
+  const [players, reviewed, notes] = await Promise.all(
+    ["/players", "/reviewed", "/notes"].map(async (path) => bodyOf(await answerFrom("companion", path))),
+  );
+  return {
+    aliases: players.flatMap((p) => p.identities.map((i) => [i.pn_id, p.alias])),
+    reviewed,
+    notes,
+  };
+}
+
+// One game's raw lines from one tracker to the other, then its hands rebuilt there.
+async function copyGame(from, to, gameId) {
+  const { entries } = bodyOf(await answerFrom(from, `/export/games/${encodeURIComponent(gameId)}`));
+  for (let k = 0; k < entries.length; k += MOVE_CHUNK) {
+    const piece = entries.slice(k, k + MOVE_CHUNK);
+    bodyOf(await answerFrom(to, "/ingest", postOf({ game_id: gameId, entries: piece, source: "move", rebuild: false })));
+  }
+  return bodyOf(await answerFrom(to, `/rebuild/${encodeURIComponent(gameId)}`, { method: "POST" }));
+}
+
 async function moveTo(to) {
   const from = await backend();
   const report = (m) => chrome.storage.session.set({ move: { from, to, at: Date.now(), ...m } });
-  const body = ({ status, body }) => {
-    if (status >= 400) throw new Error(body?.detail || `${status}`);
-    return body;
-  };
-  const post = (data) => ({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(data) });
   try {
     if (from !== to) {
-      const games = body(await answerFrom(from, "/export/games"));
+      const games = bodyOf(await answerFrom(from, "/export/games"));
       await report({ phase: "copying", done: 0, total: games.length });
       for (const [i, g] of games.entries()) {
-        const { entries } = body(await answerFrom(from, `/export/games/${encodeURIComponent(g.game_id)}`));
-        for (let k = 0; k < entries.length; k += MOVE_CHUNK) {
-          const piece = entries.slice(k, k + MOVE_CHUNK);
-          body(await answerFrom(to, "/ingest", post({ game_id: g.game_id, entries: piece, source: "move", rebuild: false })));
-        }
-        body(await answerFrom(to, `/rebuild/${encodeURIComponent(g.game_id)}`, { method: "POST" }));
+        await copyGame(from, to, g.game_id);
         await report({ phase: "copying", done: i + 1, total: games.length });
       }
-      body(await answerFrom(to, "/export/judgements", post(body(await answerFrom(from, "/export/judgements")))));
+      bodyOf(await answerFrom(to, "/export/judgements", postOf(bodyOf(await answerFrom(from, "/export/judgements")))));
       await report({ phase: "done", done: games.length, total: games.length });
     }
     await chrome.storage.sync.set({ backend: to });
@@ -313,6 +358,33 @@ const handlers = {
     if (moving) throw new Error("already moving");
     moving = moveTo(to).finally(() => { moving = null; });
     return {};
+  },
+
+  // The settings page: the judgements (aliases, review marks, notes) kept by the
+  // companion of an earlier version, into the built-in tracker, without its hands.
+  // The page asks for the permissions first; only a click there can.
+  "import-judgements": async (msg, sender) => {
+    fromOwnPage(sender);
+    return fromServer(async () =>
+      bodyOf(await answerFrom("builtin", "/export/judgements", postOf(await judgementsOfCompanion()))));
+  },
+
+  // The companion's games, newest first, beside how many lines the extension has of
+  // each. The page copies the ones it has none of, one `copy-game` at a time.
+  "server-games": async (msg, sender) => {
+    fromOwnPage(sender);
+    return fromServer(async () => {
+      const theirs = await answerFrom("companion", "/export/games");
+      if (theirs.status === 404) throw new Error("this server is from before games could be copied: run `pnt service restart`");
+      const ours = new Map(bodyOf(await answerFrom("builtin", "/export/games")).map((g) => [g.game_id, g.entries]));
+      return bodyOf(theirs).reverse().map((g) => ({ ...g, have: ours.get(g.game_id) ?? 0 }));
+    });
+  },
+
+  "copy-game": async ({ game_id }, sender) => {
+    fromOwnPage(sender);
+    if (typeof game_id !== "string" || !game_id) throw new Error("no game_id");
+    return fromServer(() => copyGame("companion", "builtin", game_id));
   },
 
   // offscreen.js, after a long quiet spell (it has saved first). Kept open while a

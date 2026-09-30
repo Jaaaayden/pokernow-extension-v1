@@ -113,8 +113,86 @@
     if (s?.ok && s.data.backend === "builtin") {
       for (const el of document.querySelectorAll(".companion-only")) el.classList.add("hidden");
     }
+    // On the companion there is nothing to bring over: everything is already there.
+    if (s?.ok && s.data.backend === "companion") $("old-row").classList.add("hidden");
+    else bringOver(s?.ok ? s.data.server : "http://127.0.0.1:52000");
     folderWatch();
     backfill();
+  }
+
+  // An earlier version kept everything in the companion's database, and may still be
+  // running beside this one. Its games can be copied here, and its aliases, review
+  // marks and notes, which are in no log. Both are safe to press twice.
+  function bringOver(server) {
+    // Asked in the click, which is the only place Chrome lets a page ask: reaching the
+    // server on this machine, and the host that lets Chrome start it.
+    async function allowed() {
+      const u = new URL(server);
+      const granted = await chrome.permissions
+        .request({ origins: [`${u.protocol}//${u.hostname}/*`], permissions: ["nativeMessaging"] })
+        .catch(() => false);
+      if (!granted) throw new Error("the extension needs your OK to reach the server on this machine");
+    }
+    async function send(type, extra = {}) {
+      const r = await chrome.runtime.sendMessage({ type, ...extra });
+      if (!r?.ok) throw new Error(r?.error || "the extension did not answer");
+      return r.data;
+    }
+
+    $("old").addEventListener("click", async () => {
+      $("old").disabled = true;
+      const li = say("bringing over aliases, marks and notes from the server…");
+      try {
+        await allowed();
+        const o = await send("import-judgements");
+        li.textContent = `from the server: ${n(o.aliases_moved)} IDs moved to their alias`
+          + (o.aliases_unknown ? `, ${n(o.aliases_unknown)} not in this database yet (copy those games, then press again)` : "")
+          + ` · ${n(o.reviewed)} review marks · ${n(o.notes)} notes`;
+        loadFacts();
+      } catch (e) {
+        li.textContent = `from the server: ${e.message || e}`;
+        li.classList.add("bad");
+      } finally {
+        $("old").disabled = false;
+      }
+    });
+
+    // Newest first, so the last session lands in seconds; pressing again while it
+    // runs stops after the game in hand.
+    const btn = $("old-games");
+    let stopping = null;
+    btn.addEventListener("click", async () => {
+      if (stopping) { stopping.stop = true; btn.disabled = true; return; }
+      const run = (stopping = { stop: false });
+      btn.textContent = "Stop copying";
+      const li = say("asking the server which games it has…");
+      let done = 0, hands = 0;
+      try {
+        await allowed();
+        const games = await send("server-games");
+        const missing = games.filter((g) => g.have === 0);
+        for (const g of games.filter((g) => g.have > 0 && g.have !== g.entries)) {
+          say(`${g.game_id}: the server has ${n(g.entries)} lines, this extension ${n(g.have)}. Left as each captured it`);
+        }
+        for (const g of missing) {
+          if (run.stop) break;
+          li.textContent = `copying ${g.game_id} (${done + 1} of ${missing.length}, ${n(g.entries)} lines)…`;
+          hands += (await send("copy-game", { game_id: g.game_id })).hands;
+          done++;
+        }
+        li.textContent = `from the server: ${done} of ${missing.length} missing games copied, ${n(hands)} hands`
+          + (run.stop && done < missing.length ? ". Stopped; press again for the rest" : "")
+          + (done ? ". Bring over aliases next" : "");
+      } catch (e) {
+        li.textContent = `from the server: ${done ? `${done} games copied, then ` : ""}${e.message || e}`;
+        li.classList.add("bad");
+      } finally {
+        stopping = null;
+        btn.textContent = "Copy games from the server";
+        btn.disabled = false;
+        loadFacts();
+      }
+    });
   }
 
   // A folder picked once and re-read whenever this page opens. The handle is kept in

@@ -133,6 +133,16 @@
       <div class="row"><button id="fetch">Fetch games</button>
         <span class="muted">About a minute a game: PokerNow limits how fast its log can be read. Keep this page open.</span></div>
     </div>
+    <div class="extension-only hidden" id="old-row">
+      <div class="field">From an earlier version's server (<code>pnt service</code>), still running
+        beside this one. Both are safe to press twice.</div>
+      <div class="row"><button id="old-games">Copy games from the server</button>
+        <span class="muted">Newest first, only games this extension has none of: a game both have
+          captured is left as each saw it, and listed if they differ.</span></div>
+      <div class="row"><button id="old">Bring over aliases</button>
+        <span class="muted">Aliases, notes and review marks. An alias lands only on a player
+          already here, so copy games first.</span></div>
+    </div>
     <div class="row hidden" id="sample-row">
       <button id="sample">Try it with sample data</button>
       <span class="muted">Someone else's hands, anonymized, to see what these pages do before your own arrive.</span>
