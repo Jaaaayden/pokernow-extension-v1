@@ -177,7 +177,21 @@ async function keepCompanion() {
   if (nativePort || Date.now() - nativeTriedAt < NATIVE_RETRY_MS) return;
   if (!(await chrome.permissions.contains({ permissions: ["nativeMessaging"] }))) return;
   nativeTriedAt = nativeOpenedAt = Date.now();
-  const port = chrome.runtime.connectNative(NATIVE_HOST);
+  // Granted since this worker started (a click on the settings page): Chrome gives
+  // a running worker no connectNative until it starts again. Starting the server
+  // is a convenience, so the call it came with goes on without it -- to a server
+  // that may well be running already.
+  if (typeof chrome.runtime.connectNative !== "function") {
+    chrome.storage.session.set({ native: { error: "allowed; works once Chrome or the extension restarts", at: Date.now() } });
+    return;
+  }
+  let port;
+  try {
+    port = chrome.runtime.connectNative(NATIVE_HOST);
+  } catch (e) {
+    chrome.storage.session.set({ native: { error: e.message || String(e), at: Date.now() } });
+    return;
+  }
   nativePort = port;
   port.onMessage.addListener((m) => chrome.storage.session.set({ native: { ...m, at: Date.now() } }));
   port.onDisconnect.addListener(() => {
