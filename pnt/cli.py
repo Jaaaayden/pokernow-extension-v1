@@ -474,9 +474,14 @@ def setup(
         )
 
     typer.echo("")
-    typer.echo("Next: load the extension in Chrome -- open chrome://extensions,")
-    typer.echo("turn on Developer mode, choose 'Load unpacked', and pick this folder:")
-    typer.echo(f"    {EXTENSION_DIR}")
+    if extension_id:
+        # The extension is loaded already: its ID is how this was run.
+        typer.echo("Next: in the extension's settings, set Tracker to 'Companion app' and Save.")
+    else:
+        typer.echo("Next: load the extension in Chrome -- open chrome://extensions,")
+        typer.echo("turn on Developer mode, choose 'Load unpacked', and pick this folder:")
+        typer.echo(f"    {EXTENSION_DIR}")
+        typer.echo("(the companion-only extension; see the README to build the full one)")
     typer.echo("")
     typer.echo(f"Then open a PokerNow game. Charts: http://{host}:{port}/chart  ({hands} hands)")
 

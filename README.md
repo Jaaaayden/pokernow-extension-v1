@@ -20,9 +20,9 @@ Other PokerNow HUDs show you a VPIP number. This shows you the spot.
 | One player across renames and devices | – | ✓ |
 
 Everything runs on your computer. The tracker is built into the Chrome extension,
-so there is nothing else to install. Add the optional companion app when you want
-the command line, a log folder kept in sync, or a database file you can open
-yourself. [Setup →](#setup)
+so once the extension is built and loaded there is nothing else to install. Add the
+optional companion app when you want the command line, a log folder kept in sync,
+or a database file you can open yourself. [Setup →](#setup)
 
 ---
 
@@ -176,15 +176,27 @@ and `--audit` checks a folder before you commit it.
 
 ### The extension
 
-Install **Tracker for PokerNow** from the Chrome Web Store, or build it yourself (see
-[Development](#development)) and load `dist/extension` with **Load unpacked** in
-`chrome://extensions`.
+It isn't on the Chrome Web Store yet, so you build it from this repo. You need
+**Python 3.11+** and git; the build uses nothing but Python's standard library.
 
-1. Pin the extension, open a PokerNow game, and click its icon. The side panel
+```bash
+git clone https://github.com/Jaaaayden/pokernow-extension-v1
+cd pokernow-extension-v1
+python scripts/build_extension.py
+```
+
+The build writes the extension to `dist/extension`. The first build downloads
+Pyodide (Python compiled to WebAssembly), checks it against the hash
+npm publishes, and keeps it in `build/`, so later builds are offline. Then, in
+Chrome:
+
+1. Open `chrome://extensions`, turn on **Developer mode**, choose **Load unpacked**
+   and pick the `dist/extension` folder.
+2. Pin the extension, open a PokerNow game, and click its icon. The side panel
    opens and starts recording the table.
-2. Open the ⚙ settings, then **tracker ↗**, for stats, charts, review, pots and
+3. Open the ⚙ settings, then **tracker ↗**, for stats, charts, review, pots and
    players.
-3. Add games you played before installing it on that same page: drop PokerNow's
+4. Add games you played before installing it on that same page: drop PokerNow's
    log exports on it, have it watch the folder they download to, or paste game
    links to fetch. **Try it with sample data** fills an empty tracker with
    someone else's (anonymized) hands to look around with.
@@ -192,6 +204,31 @@ Install **Tracker for PokerNow** from the Chrome Web Store, or build it yourself
 Your hands are kept in the extension's own storage, in this Chrome profile only.
 Removing the extension deletes them. Move them to the companion first (below) if
 you want to keep them.
+
+**Always load it from the same folder.** Chrome names an unpacked extension by its
+folder's path, and its storage goes with that name. Loaded from a copy somewhere
+else, it is a different extension with an empty tracker (and a new ID, which the
+companion would need to be told about with `pnt connect`).
+
+### Updating the extension
+
+```bash
+git pull
+python scripts/build_extension.py
+```
+
+Then press the reload arrow on the extension's card in `chrome://extensions`, and
+reload any open PokerNow tabs so they get the new capture script. The build
+replaces `dist/extension` in place, so the extension keeps its ID and your hands.
+
+Every change to the extension, including the tracker's own Python, needs this
+rebuild and reload: the extension runs what was copied into `dist/extension`, not
+the files in `pnt/`.
+
+A game already captured keeps the reading it was derived with, and is re-derived
+when more of it is captured. So after an update that changes how hands are read,
+older games keep the old reading. The companion re-derives everything with
+`pnt rebuild`; the built-in tracker has no button for that yet.
 
 ### The companion app (optional)
 
@@ -201,13 +238,13 @@ The companion app runs the same tracker as a small server on your machine and ad
 - a SQLite file you can open yourself;
 - native speed on a long history.
 
-You need **Python 3.11+** and **pipx**. If you have Python but not pipx, run
+You need **pipx** as well as Python. If you have Python but not pipx, run
 `python -m pip install --user pipx`, then `python -m pipx ensurepath`, and open a new
 terminal. On Windows, use the python.org installer rather than the Microsoft Store
-build, which sandboxes the files a background server needs.
+build, which sandboxes the files a background server needs. From your clone:
 
 ```bash
-pipx install git+https://github.com/Jaaaayden/pokernow-tracker
+pipx install .
 pnt setup --extension-id <the ID shown in the extension's ⚙ settings>
 ```
 
@@ -225,13 +262,28 @@ Then, in the extension's ⚙ settings, set **Tracker** to **Companion app** and 
 holds: every game, and every merge, note and review mark. The companion's pages
 are also at **<http://127.0.0.1:52000>**.
 
-**After updating the companion, run `pnt service restart`** (or restart Chrome),
-because a running server keeps the old code. The restart checks that the new
-server is the one answering. If an old one (a `pnt serve` left open in a terminal)
-still holds the port, it names the process to end. If the tracker can't be
-reached, the HUD and the ⚙ settings say why.
+If the tracker can't be reached, the HUD and the ⚙ settings say why.
 
-### Commands
+### Updating the companion
+
+After `git pull`, reinstall it and restart the server, because a running server
+keeps the old code:
+
+```bash
+pipx install --force .
+pnt service restart        # Windows; elsewhere, restart Chrome
+pnt rebuild                # only if the update changed how hands are read
+```
+
+The restart checks that the new server is the one answering. If an old one (a
+`pnt serve` left open in a terminal) still holds the port, it names the process
+to end. Rebuild and reload the extension too (above): the two are updated
+separately.
+
+### Companion commands
+
+These need the companion app. The built-in tracker does the same things from its
+pages.
 
 ```bash
 pnt import                                   # every log in ~/Downloads/pokernow-logs
@@ -261,7 +313,7 @@ defaults to `~/Downloads/pokernow-logs`; set `PNT_LOG_DIR` to change it.
 | Background server (Windows) | |
 |---|---|
 | `pnt service status` | Whether it's up, and which database it has open |
-| `pnt service restart` | **Run after pulling code changes.** If an old server still holds the port, it names the process to end |
+| `pnt service restart` | **Run after updating the companion.** If an old server still holds the port, it names the process to end |
 | `pnt service log` | The last lines of `~\.pnt\server.log` |
 | `pnt service stop` / `start` | Stop until the next login, or start again |
 | `pnt service uninstall` | Remove it; the database is untouched |
@@ -281,14 +333,27 @@ defaults to `~/Downloads/pokernow-logs`; set `PNT_LOG_DIR` to change it.
 ### Development
 
 ```bash
-git clone https://github.com/Jaaaayden/pokernow-tracker && cd pokernow-tracker
+git clone https://github.com/Jaaaayden/pokernow-extension-v1 && cd pokernow-extension-v1
 pip install -e ".[dev]"
 pytest -q
-python scripts/build_extension.py      # dist/extension: load it unpacked; --zip packs it for the store
+python scripts/build_extension.py      # dist/extension, then reload it in chrome://extensions
 node --test pnt/extension/*.test.mjs   # the extension, and the built-in tracker on real Pyodide
 ```
 
-`pnt/extension/` on its own is the companion-only extension. The build adds
-Pyodide and the Python the built-in tracker runs.
+The source of the extension is `pnt/extension/`, and the tracker it runs is the
+Python in `pnt/`. Chrome runs neither directly: after any change, run the build
+again and press reload on the extension's card (and reload open PokerNow tabs when
+`content.js` or the scripts it loads changed). `enginehost.test.mjs` runs against
+the build, so build before running the node tests.
+
+| Build | |
+|---|---|
+| `python scripts/build_extension.py` | The extension people install, with the built-in tracker |
+| `--zip` | Also packs `dist/pokernow-tracker-<version>.zip` for the Web Store |
+| `--no-engine` | Companion-only: no Pyodide and no Python, about 300 KB |
+| `--out DIR` | Build somewhere other than `dist/extension` (a different extension to Chrome) |
+
+The version in the manifest comes from `pyproject.toml`. Loading `pnt/extension/`
+directly also works, as the companion-only extension.
 
 See [architecture.md](docs/architecture.md#testing) for what the suite guarantees.

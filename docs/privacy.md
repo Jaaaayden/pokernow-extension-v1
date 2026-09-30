@@ -62,4 +62,4 @@ The data is not sold, shared, or used for anything but showing it back to you.
 
 ## Questions
 
-Open an issue at <https://github.com/Jaaaayden/pokernow-tracker/issues>.
+Open an issue at <https://github.com/Jaaaayden/pokernow-extension-v1/issues>.
