@@ -130,6 +130,8 @@ def test_ingest_is_idempotent(client):
     r = client.post("/ingest", json={"game_id": HU_GAME, "entries": entries})
     assert r.status_code == 200
     assert r.json()["new"] == 0, "already-known entries must not be re-inserted"
+    # The history walk jumps below the stored stretch to this, rather than stopping.
+    assert r.json()["oldest"] == min(e["order"] for e in entries)
     assert client.get("/stats").json() == before
 
 

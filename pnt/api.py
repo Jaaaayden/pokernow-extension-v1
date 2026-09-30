@@ -397,7 +397,10 @@ def ingest(ctx: Context, game_id: str, entries: list[RawEntry], source: str, reb
     """
     conn = ctx.conn
     offered, n_new = ingest_entries(conn, game_id, entries, source)
-    out = {"game_id": game_id, "offered": offered, "new": n_new}
+    # The oldest line stored for the game: the extension's history walk jumps to it
+    # when it meets stored lines, rather than assuming everything older is stored.
+    oldest = conn.execute("SELECT MIN(ord) FROM raw_entries WHERE game_id = ?", (game_id,)).fetchone()[0]
+    out = {"game_id": game_id, "offered": offered, "new": n_new, "oldest": oldest}
     if rebuild and n_new:
         out |= rebuild_game(conn, game_id)
         save_log(ctx, game_id)
